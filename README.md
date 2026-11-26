@@ -50,6 +50,8 @@ De extensie wacht 1,5 tot 3 seconden tussen verzoeken aan Instagram. Krijg je ee
 
 **Sneltoetsen in de speler:** spatie of `k` afspelen of pauzeren, `j` en `l` 5 seconden terug of vooruit, `,` en `.` één frame terug of vooruit, `m` geluid. Met ← → ga je naar de vorige of volgende post.
 
+**Carousels:** ↑ ↓ naar de vorige of volgende slide (zoals knippunten in Premiere en Resolve), `1` t/m `9` direct naar die slide. Je kunt ook links of rechts op het beeld klikken, of vegen op je telefoon.
+
 ## Op een ander apparaat
 
 Open de site, vul bij *GitHub-koppeling instellen* hetzelfde token in en ontgrendel met je wachtwoord.

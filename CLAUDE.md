@@ -44,7 +44,7 @@ Post = { code, type: 'reel'|'p'|'tv', owner, caption, savedAt, takenAt, collecti
   - De iframe wordt pas zichtbaar na `MEASURE`, om witte vlakken te voorkomen.
 - **Weergaven**: wall (tegels in 9:16 met 2px naad, 3 tot 10 kolommen) en index (tekstlijst met een preview bij hover).
 - **Speler** (`setupStage`/`mountPlayer`): met extensie een eigen `<video>` met een verse video-URL uit `media`-info. Er is een tijdlijn (scrubben, hover-tijd, resterende tijd), snelheid, geluid en carousel-bolletjes.
-  - Sneltoetsen: k of spatie, j en l (±5 s), komma en punt (frame), m (geluid), ← → (eerst door de slides van een carousel, dan vorige/volgende post), Esc. Carousels krijgen op de wall een markering met het aantal slides.
+  - Sneltoetsen: k of spatie, j en l (±5 s), komma en punt (frame), m (geluid), ← → (vorige/volgende post), Esc. Carousels: ↑ ↓ vorige/volgende slide (zoals knippunten in Premiere/Resolve), 1–9 direct naar een slide, klikvlakken links/rechts op het beeld, vegen op touch, teller rechtsboven, buren worden voorgeladen. Op de wall krijgen carousels een markering met het aantal slides. De sneltoetstekst onder de notitie past zich aan (`setKeysHint`).
   - Zonder extensie, of als de video niet laadt: de embed.
 - **Voortgang**: `progress(frac, label)` toont een dunne balk bovenin (−1 = onbepaald). Wordt gebruikt bij import (uitpakken, verwerken, opslaan) en sync.
 - **Geschiedenis**: een collectie, tag of weergave doet `pushState` (`?c=…&t=…&m=index`), een geopende post voegt `#code` toe. De terugknop sluit de speler en gaat daarna naar de vorige collectie. `fromHistory` voorkomt dubbele stappen.

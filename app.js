@@ -795,35 +795,56 @@ function mountPlayer(crop, p, m, idx) {
   } else {
     wrap.innerHTML = `<img class="full" alt="">`;
   }
-  if (m.items.length > 1) {
-    wrap.insertAdjacentHTML('beforeend', `<div class="vp-dots">${m.items.map((_, k) =>
-      `<button data-k="${k}" class="${k === idx ? 'on' : ''}" aria-label="Onderdeel ${k + 1} van ${m.items.length}"></button>`).join('')}</div>`);
+  const n = m.items.length;
+  if (n > 1) {
+    wrap.insertAdjacentHTML('beforeend', `
+      <div class="vp-dots">${m.items.map((_, k) =>
+        `<button data-k="${k}" class="${k === idx ? 'on' : ''}" aria-label="Slide ${k + 1} van ${n}"></button>`).join('')}</div>
+      <span class="vp-count">${idx + 1}/${n}</span>
+      ${idx > 0 ? '<button class="vp-side prev" data-slide="-1" aria-label="Vorige slide (pijl omhoog)"><span>‹</span></button>' : ''}
+      ${idx < n - 1 ? '<button class="vp-side next" data-slide="1" aria-label="Volgende slide (pijl omlaag)"><span>›</span></button>' : ''}`);
   }
   crop.append(wrap);
-  wrap.querySelector('.vp-dots')?.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-k]');
-    if (b) { e.stopPropagation(); mountPlayer(crop, p, m, +b.dataset.k); }
-  });
 
-  const slide = (d) => {
-    const k = idx + d;
-    if (k < 0 || k >= m.items.length) return false;
+  // Naar een slide springen; buren alvast laden zodat wisselen direct gaat.
+  const go = (k) => {
+    if (k < 0 || k >= n || k === idx) return false;
     mountPlayer(crop, p, m, k);
     return true;
   };
+  const slide = (d) => go(idx + d);
+  for (const k of [idx + 1, idx - 1]) {
+    const nb = m.items[k];
+    if (nb && !nb.video && nb.image) { const pre = new Image(); pre.referrerPolicy = 'no-referrer'; pre.src = nb.image; }
+  }
+  wrap.addEventListener('click', (e) => {
+    const dot = e.target.closest('[data-k]');
+    const side = e.target.closest('[data-slide]');
+    if (dot) { e.stopPropagation(); go(+dot.dataset.k); }
+    else if (side) { e.stopPropagation(); slide(+side.dataset.slide); }
+  });
+  // Vegen op touchscreens
+  let sx = null, sy = null;
+  wrap.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse' && !e.target.closest('.vp-bar')) { sx = e.clientX; sy = e.clientY; } });
+  wrap.addEventListener('pointerup', (e) => {
+    if (sx == null) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    sx = sy = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) slide(dx < 0 ? 1 : -1);
+  });
+  setKeysHint(!!it.video, n);
+
   if (!it.video) {
     const img = wrap.querySelector('img');
     img.referrerPolicy = 'no-referrer';
     img.addEventListener('load', () => crop.querySelector('.poster')?.remove(), { once: true });
     img.src = it.image || it.thumb;
-    player = { wrap, slide };
-    $('#sKeys').hidden = true;
+    player = { wrap, slide, go };
     return;
   }
 
   const v = wrap.querySelector('video');
-  player = { wrap, v, slide };
-  $('#sKeys').hidden = false;
+  player = { wrap, v, slide, go };
   const ui = {
     cur: $('.vp-cur', wrap), left: $('.vp-left', wrap), fill: $('.vp-fill', wrap), buf: $('.vp-buf', wrap),
     bar: $('.vp-bar', wrap), tip: $('.vp-tip', wrap),
@@ -897,6 +918,21 @@ function mountPlayer(crop, p, m, idx) {
   v.src = it.video;
   syncUi();
   v.play().catch(() => { v.muted = true; v.play().catch(syncUi); });
+}
+function setKeysHint(video, n) {
+  const parts = [];
+  if (n > 1) parts.push('pijl omhoog en omlaag vorige of volgende slide', `1 tot ${Math.min(n, 9)} direct naar een slide`);
+  if (video) parts.push('spatie of k afspelen', 'j en l 5 seconden terug of vooruit', 'komma en punt per frame', 'm geluid');
+  parts.push('pijl links en rechts vorige of volgende post');
+  const el = $('#sKeys');
+  el.textContent = parts.join(', ');
+  el.hidden = false;
+}
+function slideKey(e) {
+  if (!player || !player.slide) return false;
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { player.slide(e.key === 'ArrowDown' ? 1 : -1); return true; }
+  if (/^[1-9]$/.test(e.key)) { player.go(+e.key - 1); return true; }
+  return false;
 }
 function togglePlay() {
   const v = player && player.v;
@@ -1389,7 +1425,7 @@ function bind() {
     if (!$('#screen').hidden) {
       if (e.key === 'Escape') { e.preventDefault(); if (typing) document.activeElement.blur(); else closeScreen(); }
       else if (!typing && !e.metaKey && !e.ctrlKey && playerKey(e)) { /* afgehandeld door de speler */ }
-      else if (!typing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && player && player.slide && player.slide(e.key === 'ArrowRight' ? 1 : -1)) { e.preventDefault(); }
+      else if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && slideKey(e)) { e.preventDefault(); }
       else if (!typing && e.key === 'ArrowLeft' && state.openIdx > 0) openPost(state.openIdx - 1);
       else if (!typing && e.key === 'ArrowRight' && state.openIdx < state.list.length - 1) openPost(state.openIdx + 1);
       return;
