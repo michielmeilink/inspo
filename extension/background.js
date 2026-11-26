@@ -93,6 +93,15 @@ function item(m) {
     video: video ? video.url : null, image: large ? large.url : null, thumb: thumb ? thumb.url : null,
   };
 }
+function audioOf(m) {
+  const clip = m.clips_metadata || {};
+  const music = (clip.music_info && clip.music_info.music_asset_info)
+    || (m.music_metadata && m.music_metadata.music_info && m.music_metadata.music_info.music_asset_info);
+  if (music) return { artist: music.display_artist || '', title: music.title || '', original: false };
+  const os = clip.original_sound_info;
+  if (os) return { artist: (os.ig_artist && os.ig_artist.username) || '', title: os.original_audio_title || '', original: true };
+  return null;
+}
 function media(m) {
   const items = Array.isArray(m.carousel_media) && m.carousel_media.length ? m.carousel_media.map(item) : [item(m)];
   const first = items[0] || {};
@@ -101,7 +110,7 @@ function media(m) {
     owner: (m.user && m.user.username) || (m.owner && m.owner.username) || '',
     caption: (m.caption && m.caption.text) || '',
     takenAt: (m.taken_at || 0) * 1000,
-    w: first.w, h: first.h, dur: first.dur, thumb: first.thumb, items,
+    w: first.w, h: first.h, dur: first.dur, thumb: first.thumb, items, audio: audioOf(m),
   };
 }
 const feedItems = (j) => (j.items || []).map((x) => x.media || x).filter((m) => m && m.code).map(media);

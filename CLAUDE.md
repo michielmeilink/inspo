@@ -25,7 +25,9 @@ Live op **https://inspo.michielmeilink.com**. Repo `michielmeilink/inspo` (publi
 ```js
 db = { v: 1, posts: { [code]: Post }, collections: [naam...], tk, syncedAt, updatedAt }
 Post = { code, type: 'reel'|'p'|'tv', owner, caption, savedAt, takenAt, collections: [], tags: [], note,
-         hidden, gone, thumb /* naam in thumbs/ */, w, h, dur, mt /* media_type, 8 = carousel */, n /* aantal slides */, addedAt, editedAt }
+         hidden, gone, thumb /* naam in thumbs/ */, w, h, dur, mt /* media_type, 8 = carousel */, n /* aantal slides */, addedAt, editedAt,
+         audio /* {artist, title, original} */, cl /* kleurnamen + toon */, pal /* hex-palet */, cv /* versie kleuranalyse */,
+         ai /* {f: soort, t: techniek, m: sfeer, l: licht, s: onderwerp} */, aiv /* versie AI-labels */ }
 ```
 `editedAt` bepaalt bij het samenvoegen wiens tags, notitie of `hidden` wint. De rest wordt aangevuld of samengevoegd.
 
@@ -49,6 +51,15 @@ Post = { code, type: 'reel'|'p'|'tv', owner, caption, savedAt, takenAt, collecti
 - **Speler** (`setupStage`/`mountPlayer`): met extensie een eigen `<video>` met een verse video-URL uit `media`-info. Er is een tijdlijn (scrubben, hover-tijd, resterende tijd), snelheid, geluid en carousel-bolletjes.
   - Sneltoetsen: k of spatie, j en l (±5 s), komma en punt (frame), m (geluid), ← → (vorige/volgende post), Esc. Carousels: ↑ ↓ vorige/volgende slide (zoals knippunten in Premiere/Resolve), 1–9 direct naar een slide, klikvlakken links/rechts op het beeld, vegen op touch, teller rechtsboven, buren worden voorgeladen. Op de wall krijgen carousels een markering met het aantal slides. De sneltoetstekst onder de notitie past zich aan (`setKeysHint`).
   - Zonder extensie, of als de video niet laadt: de embed.
+- **Zoeken en filters**: `hayOf(p)` is een gecachte zoekstring per post (account, caption, notitie, tags, collecties, kleuren, muziek, AI-labels). Die wordt leeggemaakt bij `markDirty`. Elk zoekwoord moet voorkomen.
+  - Filters staan in `state.cf` (kleuren en tonen) en `state.lf` (labels als `groep:waarde`, groepen f/t/m/l/s en a = muziekartiest). Alle filters moeten tegelijk kloppen. De zijbalk toont inklapbare groepen (`renderFacets`), en boven de wall staan chips met de actieve filters (`#active`). In de URL: `?k=blauw,warm&l=m:moody|a:bonobo`, ook in de geschiedenis.
+  - Op mobiel klapt het filterpaneel open met de knop "filters (n)".
+- **Kleur** (`analyzeColor`, `runColorAnalysis`): lokaal uit elke thumbnail, verkleind naar 36x64. Levert kleurnamen op (aandeel > 10%; zwart, grijs en wit > 30%), plus de tonen warm en koel (op tint), donker, licht, kleurrijk (≥ 3 tinten) en zwart-wit, en een palet van maximaal 5 kleuren. Draait 2,5 s na het ontgrendelen en na een sync, met 4 tegelijk. Wordt opnieuw gedaan als `COLOR_V` verandert.
+- **Muziek**: de extensie leest `clips_metadata.music_info`, `original_sound_info` of `music_metadata`. Een sync loopt door zolang er posts zonder muziek in de feed staan.
+- **AI-labels** (`runLabeling`): via de officiële `@anthropic-ai/sdk` 1.6.0 van jsdelivr (`+esm`), in de browser met `dangerouslyAllowBrowser`. De API-sleutel van Michiel staat in `insp.ak`.
+  - Model `claude-opus-5-5` met effort `low`, structured output (`json_schema` met vaste woordenlijsten in `TAXO`), en `fallbacks: 'default'` met beta `server-side-fallback-2026-07-01`.
+  - 6 beelden per verzoek, 3 tegelijk. Voor het starten vraagt een `confirm` om akkoord, met een kostenschatting (ongeveer $0,005 per post, dus ruim $5 voor alles). Een weigering levert lege labels op. Bij 401/403 stopt het labelen.
+  - Niet getest met een echte sleutel, alleen met een nagebootste client.
 - **Voortgang**: `progress(frac, label)` toont een dunne balk bovenin (−1 = onbepaald). Wordt gebruikt bij import (uitpakken, verwerken, opslaan) en sync.
 - **Geschiedenis**: een collectie, tag of weergave doet `pushState` (`?c=…&t=…&m=index`), een geopende post voegt `#code` toe. De terugknop sluit de speler en gaat daarna naar de vorige collectie. `fromHistory` voorkomt dubbele stappen.
 

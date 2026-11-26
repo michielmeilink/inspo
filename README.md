@@ -52,6 +52,14 @@ De extensie wacht 1,5 tot 3 seconden tussen verzoeken aan Instagram. Krijg je ee
 
 **Carousels:** ↑ ↓ naar de vorige of volgende slide (zoals knippunten in Premiere en Resolve), `1` t/m `9` direct naar die slide. Je kunt ook links of rechts op het beeld klikken, of vegen op je telefoon.
 
+## Zoeken en filteren
+
+- **Zoeken** (`/`): op account, caption, notitie, tags, collectie, kleur (`blauw`, `warm`, `zwart-wit`), muziek (`bonobo`) en AI-labels (`drone`, `moody`, `golden hour`). Elk woord moet voorkomen.
+- **Kleur**: je browser analyseert elke thumbnail zelf. In de zijbalk kies je een kleurvlak of toon. In de speler zie je het palet; klik op een kleur om de hexcode te kopiëren.
+- **Muziek**: komt mee met de sync. Klik op een artiest in de speler of in de zijbalk om alles met die muziek te zien. (Laad de extensie eerst opnieuw, versie 1.2.0.)
+- **AI-labels**: zet in instellingen je Claude API-sleutel en klik op *label posts*. Claude geeft per post labels voor soort, techniek, sfeer, licht en onderwerp. De kosten zijn ongeveer een halve cent per post; je krijgt eerst een schatting te zien. De thumbnails, accountnamen en captions gaan daarvoor naar Anthropic.
+- Filters stapelen: blauw + moody + drone geeft alleen posts die alle drie hebben. De actieve filters staan als chips boven de wall, en de link in je adresbalk bewaart ze.
+
 ## Op een ander apparaat
 
 Open de site, vul bij *GitHub-koppeling instellen* hetzelfde token in en ontgrendel met je wachtwoord.

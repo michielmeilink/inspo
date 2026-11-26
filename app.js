@@ -18,7 +18,7 @@ const store = {
 
 const state = {
   db: null, password: null, blob: null, sha: null,
-  view: store.get('view', 'all'), q: '', tag: null, sort: store.get('sort', 'new'), mode: store.get('mode', 'wall'),
+  view: store.get('view', 'all'), q: '', tag: null, sort: store.get('sort', 'new'), mode: store.get('mode', 'wall'), cf: [], lf: [],
   list: [], openIdx: -1, saving: false, again: false,
 };
 
@@ -134,7 +134,7 @@ function mergeInto(out, remote) {
     const lp = out.posts[code];
     if (!lp) { out.posts[code] = rp; continue; }
     for (const c of rp.collections || []) if (!lp.collections.includes(c)) lp.collections.push(c);
-    for (const k of ['owner', 'caption', 'thumb', 'w', 'h', 'dur', 'mt', 'n', 'takenAt']) if (!lp[k] && rp[k]) lp[k] = rp[k];
+    for (const k of ['owner', 'caption', 'thumb', 'w', 'h', 'dur', 'mt', 'n', 'takenAt', 'audio', 'cl', 'pal', 'cv', 'ai', 'aiv']) if (!lp[k] && rp[k]) lp[k] = rp[k];
     if ((rp.savedAt || 0) > (lp.savedAt || 0)) lp.savedAt = rp.savedAt;
     if ((rp.editedAt || 0) > (lp.editedAt || 0)) {
       lp.tags = rp.tags || []; lp.note = rp.note || ''; lp.hidden = !!rp.hidden; lp.editedAt = rp.editedAt;
@@ -320,7 +320,7 @@ const nextFrame = () => new Promise(r => requestAnimationFrame(() => r()));
 /* ---------- Opslaan ---------- */
 let saveTimer = null;
 function setStatus(text, cls = '') { const el = $('#status'); el.textContent = text; el.className = 'status ' + cls; }
-function markDirty() { setStatus('niet opgeslagen', 'warn'); clearTimeout(saveTimer); saveTimer = setTimeout(save, 1200); }
+function markDirty() { invalidateHay(); setStatus('niet opgeslagen', 'warn'); clearTimeout(saveTimer); saveTimer = setTimeout(save, 1200); }
 window.addEventListener('beforeunload', (e) => { if (saveTimer || state.saving || sync.running) { e.preventDefault(); e.returnValue = ''; } });
 
 async function save() {
@@ -410,6 +410,7 @@ async function unlock(pw, remember) {
   render();
   updateSyncUi();
   maybeAutoSync();
+  setTimeout(runColorAnalysis, 2500);
   return true;
 }
 
@@ -589,6 +590,7 @@ function applyMeta(p, m) {
   const set = (k, v) => { if (v && p[k] !== v) { p[k] = v; changed = true; } };
   set('w', m.w); set('h', m.h); set('dur', Math.round((m.dur || 0) * 10) / 10); set('mt', m.mt); set('takenAt', m.takenAt);
   if (m.items && m.items.length > 1) set('n', m.items.length);
+  if (m.audio && JSON.stringify(m.audio) !== JSON.stringify(p.audio)) { p.audio = m.audio; changed = true; }
   if (!p.owner) set('owner', m.owner);
   if (!p.caption) set('caption', m.caption);
   if (m.product) set('type', typeFromMedia(m, p.type));
@@ -678,6 +680,7 @@ async function runSync() {
       if (sync.stop) break;
       if (ensure(m)) work++;
       const p = db.posts[m.code];
+      if (m.audio && !p.audio) work++;   // muziek nog niet bekend: deze pagina telt als werk
       if (collection && !p.collections.includes(collection)) { p.collections.push(collection); work++; }
       applyMeta(p, m);
       if (!p.thumb && !p.hidden && m.thumb) { work++; await makeThumb(p, m.thumb); await pause(60); }
@@ -750,6 +753,7 @@ async function runSync() {
     updateSyncUi();
     if (sync.lastError) setStatus('sync gestopt: ' + sync.lastError, 'err');
     const y = scrollY; render(); scrollTo(0, y);
+    runColorAnalysis();
   }
 }
 
@@ -989,6 +993,425 @@ function playerKey(e) {
   return true;
 }
 
+/* ---------- Zoekindex ----------
+ * Per post één kleine-letterstring met alles waarop je kunt zoeken. Wordt leeggemaakt bij elke wijziging. */
+let hayCache = new Map();
+function invalidateHay() { hayCache = new Map(); }
+function hayOf(p) {
+  let h = hayCache.get(p.code);
+  if (h == null) {
+    const a = p.ai || {};
+    h = [p.owner, p.caption, p.note, p.code, typeLabel[p.type], ...p.tags, ...p.collections, ...(p.cl || []),
+      p.audio && p.audio.artist, p.audio && p.audio.title, p.audio && p.audio.original ? 'original audio' : '',
+      ...(a.f || []), ...(a.t || []), ...(a.m || []), ...(a.l || []), ...(a.s || [])]
+      .filter(Boolean).join(' ').toLowerCase();
+    hayCache.set(p.code, h);
+  }
+  return h;
+}
+
+/* ---------- Kleur ----------
+ * Uit elke thumbnail: kleurnamen (aandeel van het beeld), toon (warm/koel/donker/licht/zwart-wit/kleurrijk)
+ * en een palet van maximaal 5 duidelijk verschillende kleuren. Alles lokaal in de browser. */
+const COLOR_V = 1;
+const HUES = [['rood', 345, 15], ['oranje', 15, 42], ['geel', 42, 68], ['groen', 68, 160], ['cyaan', 160, 198],
+  ['blauw', 198, 255], ['paars', 255, 290], ['roze', 290, 345]];
+const SWATCH = {
+  rood: '#d64a3b', oranje: '#e88a35', geel: '#e3c440', groen: '#5d9b55', cyaan: '#43aebc', blauw: '#3b67cf',
+  paars: '#7953c4', roze: '#d867a5', zwart: '#000000', grijs: '#8a8a86', wit: '#f4f3ee',
+};
+const COLOR_ORDER = ['rood', 'oranje', 'geel', 'groen', 'cyaan', 'blauw', 'paars', 'roze', 'zwart', 'grijs', 'wit'];
+const TONES = ['warm', 'koel', 'donker', 'licht', 'kleurrijk', 'zwart-wit'];
+function hueName(h) {
+  for (const [n, a, b] of HUES) if (a > b ? (h >= a || h < b) : (h >= a && h < b)) return n;
+  return 'rood';
+}
+async function analyzeColor(url) {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  const W = 36, H = 64;
+  const c = new OffscreenCanvas(W, H);
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(img, 0, 0, W, H);
+  const d = g.getImageData(0, 0, W, H).data;
+  const n = W * H;
+  let L = 0, colored = 0;
+  const buckets = {};
+  const bins = new Map();
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255;
+    const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b), l = (mx + mn) / 2, dl = mx - mn;
+    const s = dl === 0 ? 0 : dl / (1 - Math.abs(2 * l - 1));
+    let h = 0;
+    if (dl) {
+      if (mx === r) h = 60 * (((gg - b) / dl) % 6);
+      else if (mx === gg) h = 60 * ((b - r) / dl + 2);
+      else h = 60 * ((r - gg) / dl + 4);
+      if (h < 0) h += 360;
+    }
+    L += l;
+    let name;
+    if (l < 0.12) name = 'zwart';
+    else if (l > 0.88 && s < 0.4) name = 'wit';
+    else if (s < 0.18 || dl < 0.08) name = 'grijs';
+    else { name = hueName(h); colored++; }
+    buckets[name] = (buckets[name] || 0) + 1;
+    const key = (d[i] >> 5) << 6 | (d[i + 1] >> 5) << 3 | (d[i + 2] >> 5);
+    const bb = bins.get(key) || [0, 0, 0, 0];
+    bb[0]++; bb[1] += d[i]; bb[2] += d[i + 1]; bb[3] += d[i + 2];
+    bins.set(key, bb);
+  }
+  L /= n;
+  const cl = [];
+  for (const k of COLOR_ORDER) {
+    const share = (buckets[k] || 0) / n;
+    if (['zwart', 'grijs', 'wit'].includes(k) ? share > 0.3 : share > 0.1) cl.push(k);
+  }
+  const satShare = colored / n;
+  const share = (k) => (buckets[k] || 0) / n;
+  // Warm/koel op tint: groen en paars tellen niet mee
+  const warmS = share('rood') + share('oranje') + share('geel') + share('roze') * 0.5;
+  const coolS = share('cyaan') + share('blauw') + share('paars') * 0.5;
+  if (warmS > 0.2 && warmS > coolS * 1.6) cl.push('warm');
+  if (coolS > 0.2 && coolS > warmS * 1.6) cl.push('koel');
+  if (L < 0.27) cl.push('donker');
+  if (L > 0.6) cl.push('licht');
+  if (HUES.filter(([k]) => share(k) > 0.07).length >= 3) cl.push('kleurrijk');
+  if (satShare < 0.02) cl.push('zwart-wit');
+  const pal = [];
+  for (const bb of [...bins.values()].sort((a, b) => b[0] - a[0])) {
+    const rgb = [bb[1] / bb[0], bb[2] / bb[0], bb[3] / bb[0]].map(Math.round);
+    if (pal.every(p => Math.hypot(p[0] - rgb[0], p[1] - rgb[1], p[2] - rgb[2]) > 52)) pal.push(rgb);
+    if (pal.length === 5) break;
+  }
+  return { cl, pal: pal.map(rgb => '#' + rgb.map(x => x.toString(16).padStart(2, '0')).join('')) };
+}
+
+const colorJob = { running: false };
+async function runColorAnalysis() {
+  if (colorJob.running || !state.db) return;
+  const todo = Object.values(state.db.posts).filter(p => p.thumb && p.cv !== COLOR_V);
+  if (!todo.length) return;
+  colorJob.running = true;
+  const total = todo.length;
+  let done = 0, sinceSave = 0;
+  const worker = async () => {
+    while (todo.length) {
+      const p = todo.shift();
+      try {
+        const r = await analyzeColor(await thumbUrl(p.thumb));
+        p.cl = r.cl; p.pal = r.pal; p.cv = COLOR_V;
+      } catch { /* thumbnail nu niet bereikbaar: volgende keer opnieuw */ }
+      done++;
+      if (!sync.running && !labeling.running) progress(done / total, `kleuren analyseren ${done} van ${total}`);
+      if (++sinceSave >= 250) { sinceSave = 0; markDirty(); }
+    }
+  };
+  try {
+    await Promise.all([worker(), worker(), worker(), worker()]);
+  } finally {
+    colorJob.running = false;
+    if (!sync.running && !labeling.running) progress(null);
+    markDirty();
+    renderFacetsOnly();
+  }
+}
+
+/* ---------- AI-labels (Claude) ----------
+ * Vaste woordenlijst zodat de filters schoon blijven. Engels, omdat dit de vaktaal is. */
+const AI_V = 1;
+const AI_MODEL = 'claude-opus-5-5';
+const ANTHROPIC_SDK = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
+const TAXO = {
+  f: ['commercial', 'music video', 'documentary', 'travel film', 'short film', 'fashion', 'sports', 'food', 'product',
+    'tutorial', 'behind the scenes', 'vlog', 'motion graphics', '3d', 'animation', 'typography', 'ai generated',
+    'photography', 'title sequence', 'vfx breakdown', 'color grading', 'event', 'architecture', 'nature'],
+  t: ['drone', 'fpv', 'timelapse', 'hyperlapse', 'slow motion', 'macro', 'handheld', 'gimbal', 'static shot', 'pov',
+    'underwater', 'split screen', 'transition', 'speed ramp', 'stop motion', 'mixed media', 'text animation',
+    'match cut', 'whip pan', 'long take', 'glitch', 'film grain', 'anamorphic', 'before after', 'screen recording',
+    'talking head', 'collage', 'freeze frame'],
+  m: ['cinematic', 'moody', 'dreamy', 'energetic', 'calm', 'nostalgic', 'playful', 'dark', 'minimal', 'epic',
+    'intimate', 'gritty', 'romantic', 'surreal', 'funny', 'melancholic', 'luxurious', 'raw', 'informative'],
+  l: ['golden hour', 'blue hour', 'night', 'neon', 'natural light', 'studio light', 'high contrast', 'low key',
+    'high key', 'backlit', 'overcast', 'harsh sun', 'practical lights', 'soft light'],
+};
+const GROUPS = [
+  ['f', 'soort'], ['t', 'techniek'], ['m', 'sfeer'], ['l', 'licht'], ['s', 'onderwerp'], ['a', 'muziek'],
+];
+const AI_SYSTEM = `You label saved Instagram posts for a video editor and animator who uses them as creative reference.
+For each numbered image (a still or the cover frame of a video) you get the account name, the audio if known and the caption.
+Pick labels only from the allowed lists in the schema:
+- format: what kind of piece it is (1-2 labels).
+- technique: camera or editing techniques that are visible or clearly stated in the caption (0-3 labels). Do not guess techniques you cannot see.
+- mood: the overall feel (1-2 labels).
+- light: the lighting (0-2 labels).
+- subject: 1-4 short lowercase English nouns for what is shown (for example "ocean", "city street", "portrait", "car").
+Return exactly one item per image, with i set to the image number. Be precise rather than generous: fewer correct labels beat many vague ones.`;
+const arr = (list) => ({ type: 'array', items: { type: 'string', enum: list } });
+const AI_SCHEMA = {
+  type: 'object',
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          i: { type: 'integer' },
+          format: arr(TAXO.f), technique: arr(TAXO.t), mood: arr(TAXO.m), light: arr(TAXO.l),
+          subject: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['i', 'format', 'technique', 'mood', 'light', 'subject'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['items'],
+  additionalProperties: false,
+};
+// Prijzen Claude Opus 5.5 per miljoen tokens (input / output)
+const AI_PRICE = { in: 4, out: 20 };
+const AI_EST_PER_POST = 0.005;   // ruwe schatting in dollar: ~520 input- en ~120 outputtokens per beeld
+
+const labeling = { running: false, stop: false, inTok: 0, outTok: 0, done: 0, lastError: '' };
+let anthropicCtor = null;
+async function anthropicClient() {
+  if (!anthropicCtor) {
+    const mod = await import(ANTHROPIC_SDK);
+    anthropicCtor = mod.default || mod.Anthropic;
+  }
+  return new anthropicCtor({ apiKey: store.get('ak', ''), dangerouslyAllowBrowser: true, maxRetries: 4 });
+}
+const aiTodo = () => Object.values(state.db.posts).filter(p => p.thumb && !p.hidden && !p.gone && p.aiv !== AI_V);
+const aiCost = () => (labeling.inTok * AI_PRICE.in + labeling.outTok * AI_PRICE.out) / 1e6;
+const clip = (s, n) => { s = (s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s; };
+
+async function labelBatch(client, posts) {
+  const content = [];
+  for (let k = 0; k < posts.length; k++) {
+    const p = posts[k];
+    const buf = new Uint8Array(await (await fetch(await thumbUrl(p.thumb))).arrayBuffer());
+    const audio = p.audio ? `${p.audio.original ? 'original audio' : 'music'}: ${[p.audio.artist, p.audio.title].filter(Boolean).join(' - ')}` : 'unknown';
+    content.push({ type: 'text', text: `Image ${k}. Account: @${p.owner || 'unknown'}. Audio: ${audio}. Caption: ${clip(p.caption, 300) || '(none)'}` });
+    content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64(buf) } });
+  }
+  content.push({ type: 'text', text: `Label all ${posts.length} images.` });
+  const res = await client.beta.messages.create({
+    model: AI_MODEL,
+    max_tokens: 8000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    system: AI_SYSTEM,
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: AI_SCHEMA } },
+    messages: [{ role: 'user', content }],
+  });
+  const u = res.usage || {};
+  labeling.inTok += (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+  labeling.outTok += u.output_tokens || 0;
+  if (res.stop_reason === 'refusal') {
+    // Geweigerd: niet opnieuw proberen, wel markeren zodat de rest doorgaat.
+    for (const p of posts) { p.ai = { f: [], t: [], m: [], l: [], s: [] }; p.aiv = AI_V; }
+    return;
+  }
+  const text = res.content.filter(b => b.type === 'text').map(b => b.text).join('');
+  const data = JSON.parse(text);
+  const pick = (list, g) => [...new Set((list || []).filter(x => TAXO[g].includes(x)))];
+  for (const it of data.items || []) {
+    const p = posts[it.i];
+    if (!p) continue;
+    p.ai = {
+      f: pick(it.format, 'f'), t: pick(it.technique, 't'), m: pick(it.mood, 'm'), l: pick(it.light, 'l'),
+      s: [...new Set((it.subject || []).map(x => String(x).toLowerCase().trim()).filter(Boolean))].slice(0, 4),
+    };
+    p.aiv = AI_V;
+  }
+}
+
+async function runLabeling() {
+  if (labeling.running) { labeling.stop = true; progress(-1, 'labelen stopt na deze ronde…'); return; }
+  if (!store.get('ak', '')) { toast('Vul eerst je Claude API-sleutel in bij instellingen.'); openSettings(); return; }
+  const todo = aiTodo();
+  if (!todo.length) { toast('Alle posts met een thumbnail hebben al labels.'); return; }
+  const est = (todo.length * AI_EST_PER_POST).toFixed(2);
+  if (!confirm(`${todo.length} posts labelen met Claude (${AI_MODEL}).\nGeschatte kosten: ongeveer $${est}.\nDe thumbnails, accountnamen en captions gaan daarvoor naar Anthropic.\n\nDoorgaan?`)) return;
+  labeling.running = true; labeling.stop = false; labeling.lastError = ''; labeling.done = 0;
+  updateLabelUi();
+  const total = todo.length;
+  let client;
+  try {
+    client = await anthropicClient();
+  } catch (e) {
+    labeling.running = false; labeling.lastError = 'Claude-SDK laden lukte niet: ' + e.message; updateLabelUi(); toast(labeling.lastError); return;
+  }
+  const BATCH = 6;
+  let sinceSave = 0;
+  const worker = async () => {
+    while (todo.length && !labeling.stop) {
+      const batch = todo.splice(0, BATCH);
+      try {
+        await labelBatch(client, batch);
+      } catch (e) {
+        const status = e && e.status;
+        if (status === 401 || status === 403) { labeling.lastError = 'API-sleutel geweigerd. Controleer de sleutel in instellingen.'; labeling.stop = true; return; }
+        if (status === 400 && /credit|billing|balance/i.test(e.message || '')) { labeling.lastError = 'Geen API-tegoed: ' + e.message; labeling.stop = true; return; }
+        labeling.lastError = e.message || String(e);   // deze batch overslaan; volgende keer opnieuw
+      }
+      labeling.done += batch.length;
+      progress(labeling.done / total, `labelen ${labeling.done} van ${total}, $${aiCost().toFixed(2)}`);
+      if ((sinceSave += batch.length) >= 60) { sinceSave = 0; markDirty(); renderFacetsOnly(); }
+    }
+  };
+  try {
+    await Promise.all([worker(), worker(), worker()]);
+  } finally {
+    labeling.running = false;
+    progress(null);
+    markDirty();
+    updateLabelUi();
+    const y = scrollY; render(); scrollTo(0, y);
+    toast(labeling.lastError
+      ? `Labelen gestopt: ${labeling.lastError}`
+      : `${labeling.done} posts gelabeld voor $${aiCost().toFixed(2)}.`, labeling.lastError ? 9000 : 4000);
+  }
+}
+function updateLabelUi() {
+  const el = $('#aiStatus');
+  if (!el || !state.db) return;
+  const left = aiTodo().length;
+  const labeled = Object.values(state.db.posts).filter(p => p.aiv === AI_V).length;
+  el.textContent = `${labeled} posts hebben labels, ${left} nog niet`
+    + (left ? ` (geschat $${(left * AI_EST_PER_POST).toFixed(2)})` : '') + '.'
+    + (labeling.inTok ? ` Deze sessie: $${aiCost().toFixed(2)}.` : '')
+    + (labeling.lastError ? ` Laatste fout: ${labeling.lastError}` : '');
+  $('#aiRun').textContent = labeling.running ? 'stop labelen' : 'label posts';
+}
+
+/* ---------- Filters (kleur, labels, muziek) ---------- */
+function postLabels(p, g) {
+  if (g === 'a') {
+    if (!p.audio || p.audio.original || !p.audio.artist) return [];
+    const v = p.audio.artist.toLowerCase();
+    if (!labelName.has('a:' + v)) labelName.set('a:' + v, p.audio.artist);
+    return [v];
+  }
+  return (p.ai && p.ai[g]) || [];
+}
+const labelName = new Map();   // 'a:khruangbin' -> 'Khruangbin'
+function displayLabel(key) { return labelName.get(key) || key.slice(2); }
+function passesFacets(p) {
+  for (const c of state.cf) if (!(p.cl || []).includes(c)) return false;
+  for (const key of state.lf) {
+    const g = key[0], v = key.slice(2);
+    if (!postLabels(p, g).includes(v)) return false;
+  }
+  return true;
+}
+const MORE = 8;
+const facetOpen = new Set(store.get('fopen', ['kleur', 'f', 'm']));
+const facetMore = new Set();
+function renderFacetsOnly() { if (state.db) renderFacets(); }
+function renderFacets() {
+  const list = state.list || [];
+  const box = $('#facets');
+  // Kleuren
+  const cc = new Map();
+  for (const p of list) for (const c of p.cl || []) cc.set(c, (cc.get(c) || 0) + 1);
+  const analysed = Object.values(state.db.posts).some(p => p.cv === COLOR_V);
+  let html = '';
+  if (analysed) {
+    const sw = COLOR_ORDER.filter(c => cc.get(c) || state.cf.includes(c)).map(c =>
+      `<button class="sw${state.cf.includes(c) ? ' on' : ''}" data-cf="${c}" style="--c:${SWATCH[c]}" title="${c} (${cc.get(c) || 0})" aria-label="${c}, ${cc.get(c) || 0} posts" aria-pressed="${state.cf.includes(c)}"></button>`).join('');
+    const tones = TONES.filter(t => cc.get(t) || state.cf.includes(t)).map(t =>
+      `<button class="${state.cf.includes(t) ? 'on' : ''}" data-cf="${t}" aria-pressed="${state.cf.includes(t)}"><span>${t}</span><span class="n">${cc.get(t) || 0}</span></button>`).join('');
+    html += facetGroup('kleur', 'kleur', `<div class="swatches">${sw}</div><nav class="list small tones">${tones}</nav>`, false);
+  }
+  for (const [g, name] of GROUPS) {
+    const counts = new Map();
+    for (const p of list) for (const v of postLabels(p, g)) counts.set(v, (counts.get(v) || 0) + 1);
+    for (const key of state.lf) if (key[0] === g && !counts.has(key.slice(2))) counts.set(key.slice(2), 0);
+    if (!counts.size) continue;
+    const rows = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const showAll = facetMore.has(g);
+    const shown = rows.filter((r, i) => showAll || i < MORE || state.lf.includes(`${g}:${r[0]}`));
+    const buttons = shown.map(([v, n]) => {
+      const key = `${g}:${v}`, on = state.lf.includes(key);
+      return `<button class="${on ? 'on' : ''}" data-lf="${esc(key)}" aria-pressed="${on}"><span>${esc(displayLabel(key))}</span><span class="n">${n}</span></button>`;
+    }).join('');
+    const more = rows.length > MORE ? `<button class="more" data-more="${g}">${showAll ? 'minder' : `alle ${rows.length}`}</button>` : '';
+    html += facetGroup(g, name, `<nav class="list small">${buttons}</nav>${more}`, true);
+  }
+  box.innerHTML = html;
+  renderActive();
+}
+function facetGroup(id, name, inner, collapsible) {
+  const open = facetOpen.has(id);
+  return `<section class="fg${open ? ' open' : ''}" data-g="${id}">
+    <button class="rail-h fg-h" data-toggle="${id}" aria-expanded="${open}">${name}</button>
+    <div class="fg-body">${inner}</div></section>`;
+}
+function renderActive() {
+  const el = $('#active');
+  const chips = [
+    ...(state.tag ? [[`#${state.tag}`, 'tag', state.tag]] : []),
+    ...state.cf.map(c => [c, 'cf', c]),
+    ...state.lf.map(k => [displayLabel(k), 'lf', k]),
+  ];
+  el.hidden = !chips.length;
+  $('#btnFilters').textContent = chips.length ? `filters (${chips.length})` : 'filters';
+  el.innerHTML = chips.map(([label, kind, val]) =>
+    `<button class="chip-x" data-rm-${kind}="${esc(val)}" title="filter weghalen">${kind === 'cf' && SWATCH[val] ? `<i style="--c:${SWATCH[val]}"></i>` : ''}${esc(label)} <span aria-hidden="true">×</span></button>`).join('')
+    + (chips.length > 1 ? '<button class="text" data-clear="1">wis alles</button>' : '');
+}
+function toggleIn(arr, v) { const i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); else arr.push(v); }
+function onFacetClick(e) {
+  const t = e.target.closest('button');
+  if (!t) return;
+  if (t.dataset.toggle) {
+    const id = t.dataset.toggle;
+    if (facetOpen.has(id)) facetOpen.delete(id); else facetOpen.add(id);
+    store.set('fopen', [...facetOpen]);
+    t.closest('.fg').classList.toggle('open', facetOpen.has(id));
+    t.setAttribute('aria-expanded', facetOpen.has(id));
+    return;
+  }
+  if (t.dataset.more) { const g = t.dataset.more; if (facetMore.has(g)) facetMore.delete(g); else facetMore.add(g); renderFacets(); return; }
+  if (t.dataset.cf) toggleIn(state.cf, t.dataset.cf);
+  else if (t.dataset.lf) toggleIn(state.lf, t.dataset.lf);
+  else return;
+  pushNav(); render(); scrollTo({ top: 0 });
+}
+function onActiveClick(e) {
+  const t = e.target.closest('button');
+  if (!t) return;
+  if (t.dataset.clear) { state.cf = []; state.lf = []; state.tag = null; }
+  else if (t.dataset.rmTag != null) state.tag = null;
+  else if (t.dataset.rmCf) toggleIn(state.cf, t.dataset.rmCf);
+  else if (t.dataset.rmLf) toggleIn(state.lf, t.dataset.rmLf);
+  else return;
+  pushNav(); render();
+}
+// Filter kiezen vanuit de speler: speler sluiten, filter aan, terug naar de wall.
+function filterFromScreen(kind, val) {
+  fromHistory = true; closeScreen(false); fromHistory = false;
+  history.replaceState(navState(), '', navUrl(navState()));
+  if (kind === 'cf' && !state.cf.includes(val)) state.cf.push(val);
+  if (kind === 'lf' && !state.lf.includes(val)) state.lf.push(val);
+  pushNav(); render(); scrollTo({ top: 0 });
+}
+function renderScreenExtras(p) {
+  const a = p.audio;
+  $('#sAudio').innerHTML = a
+    ? `<span class="dim">${a.original ? 'audio' : 'muziek'}</span> ${!a.original && a.artist
+      ? `<button class="text" data-sf="lf" data-v="${esc('a:' + a.artist.toLowerCase())}">${esc(a.artist)}</button>${a.title ? ', ' + esc(a.title) : ''}`
+      : esc([a.artist && '@' + a.artist, a.title].filter(Boolean).join(', ') || 'original audio')}`
+    : '';
+  $('#sPal').innerHTML = (p.pal || []).map(h => `<button class="pal-sw" style="--c:${h}" data-hex="${h}" title="kopieer ${h}" aria-label="kopieer kleur ${h}"></button>`).join('')
+    + (p.cl || []).filter(c => SWATCH[c] || TONES.includes(c)).map(c => `<button class="text" data-sf="cf" data-v="${c}">${c}</button>`).join('');
+  const ai = p.ai || {};
+  $('#sLabels').innerHTML = GROUPS.filter(([g]) => g !== 'a').map(([g]) => (ai[g] || []).map(v =>
+    `<button class="text" data-sf="lf" data-v="${esc(g + ':' + v)}">${esc(v)}</button>`).join('')).join('');
+}
+
 /* ---------- Render ---------- */
 const MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 function fmtDate(ms, long = false) {
@@ -1014,12 +1437,8 @@ function computeList() {
   const terms = state.q.toLowerCase().split(/\s+/).filter(Boolean).map(t => t.replace(/^[#@]/, ''));
   let arr = visiblePosts().filter(inView);
   if (state.tag) arr = arr.filter(p => p.tags.includes(state.tag));
-  if (terms.length) {
-    arr = arr.filter(p => {
-      const hay = [p.owner, p.caption, p.note, p.code, typeLabel[p.type], ...p.tags, ...p.collections].join(' ').toLowerCase();
-      return terms.every(t => hay.includes(t));
-    });
-  }
+  if (state.cf.length || state.lf.length) arr = arr.filter(passesFacets);
+  if (terms.length) arr = arr.filter(p => { const hay = hayOf(p); return terms.every(t => hay.includes(t)); });
   const by = {
     new: (a, b) => (b.savedAt || 0) - (a.savedAt || 0),
     old: (a, b) => (a.savedAt || 0) - (b.savedAt || 0),
@@ -1176,7 +1595,8 @@ function render() {
   if (!state.db) return;
   renderRail();
   state.list = computeList();
-  $('#viewTitle').textContent = state.tag ? `${viewName()} #${state.tag}` : viewName();
+  renderFacets();
+  $('#viewTitle').textContent = viewName();
   $('#viewCount').textContent = state.list.length;
   $('#modeWall').classList.toggle('on', state.mode === 'wall');
   $('#modeIndex').classList.toggle('on', state.mode === 'index');
@@ -1202,7 +1622,8 @@ function render() {
   if (!state.list.length) {
     empty.hidden = false;
     empty.innerHTML = Object.keys(state.db.posts).length
-      ? '<h2>Niets gevonden</h2><p>Probeer een andere zoekterm, of kies een andere collectie of tag.</p>'
+      ? `<h2>Niets gevonden</h2><p>Geen posts met ${state.q ? `„${esc(state.q)}”` : 'deze filters'}${state.cf.length || state.lf.length || state.tag ? ' en de gekozen filters' : ''} in ${esc(viewName())}.</p>
+         ${state.cf.length || state.lf.length || state.tag ? '<p><button class="text" data-clear="1" onclick="state.cf=[];state.lf=[];state.tag=null;pushNav();render()">wis de filters</button></p>' : ''}`
       : `<h2>Nog leeg</h2><p>Sleep je Instagram-export (.zip) hierheen, of kies <b>importeer</b> linksonder.
          Vraag de export aan via Accountcentrum → Je informatie downloaden → Opgeslagen → JSON.</p>`;
   } else empty.hidden = true;
@@ -1240,12 +1661,15 @@ function hidePeek() { clearTimeout(peekTimer); $('#peek').hidden = true; }
  * Elke collectie, tag of weergave is een stap in de browsergeschiedenis, net als een geopende post.
  * Zo gaat de terugknop (ook de veeggebaar op mobiel) naar de vorige stap in plaats van de site uit. */
 let fromHistory = false;
-const navState = () => ({ view: state.view, tag: state.tag, mode: state.mode });
+const navState = () => ({ view: state.view, tag: state.tag, mode: state.mode, cf: [...state.cf], lf: [...state.lf] });
+const navKey = (st) => JSON.stringify([st.view || 'all', st.tag || null, st.mode || '', st.cf || [], st.lf || []]);
 function navUrl(st, code) {
   const q = new URLSearchParams();
   if (st.view && st.view !== 'all') q.set('c', st.view);
   if (st.tag) q.set('t', st.tag);
   if (st.mode === 'index') q.set('m', 'index');
+  if (st.cf && st.cf.length) q.set('k', st.cf.join(','));
+  if (st.lf && st.lf.length) q.set('l', st.lf.join('|'));
   const qs = q.toString();
   return location.pathname + (qs ? '?' + qs : '') + (code ? '#' + code : '');
 }
@@ -1253,7 +1677,7 @@ function pushNav() {
   if (fromHistory) return;
   const st = navState();
   const cur = history.state || {};
-  if (cur.view === st.view && cur.tag === st.tag && cur.mode === st.mode && !cur.post) return;
+  if (navKey(cur) === navKey(st) && !cur.post) return;
   history.pushState(st, '', navUrl(st));
 }
 function initNav() {
@@ -1261,6 +1685,8 @@ function initNav() {
   if (q.has('c')) state.view = q.get('c');
   if (q.has('t')) state.tag = q.get('t');
   if (q.get('m') === 'index') state.mode = 'index';
+  if (q.get('k')) state.cf = q.get('k').split(',').filter(Boolean);
+  if (q.get('l')) state.lf = q.get('l').split('|').filter(Boolean);
   history.replaceState(navState(), '', navUrl(navState()));
 }
 window.addEventListener('popstate', (e) => {
@@ -1268,9 +1694,10 @@ window.addEventListener('popstate', (e) => {
   const st = e.state || { view: 'all', tag: null, mode: state.mode };
   fromHistory = true;
   try {
-    const changed = (st.view || 'all') !== state.view || (st.tag || null) !== state.tag || (st.mode && st.mode !== state.mode);
+    const changed = navKey({ ...st, mode: st.mode || state.mode }) !== navKey(navState());
     if (!$('#screen').hidden && !st.post) closeScreen(!changed);
     state.view = st.view || 'all'; state.tag = st.tag || null;
+    state.cf = [...(st.cf || [])]; state.lf = [...(st.lf || [])];
     if (st.mode) state.mode = st.mode;
     store.set('view', state.view);
     if (changed) { render(); scrollTo({ top: 0 }); }
@@ -1303,6 +1730,7 @@ function openPost(i) {
   $('#sOwner').href = p.owner ? `https://www.instagram.com/${encodeURIComponent(p.owner)}/` : postUrl(p);
   $('#sMeta').textContent = `${typeLabel[p.type] || 'post'}${p.dur ? ', ' + fmtDur(p.dur) : ''}${p.savedAt ? ', opgeslagen ' + fmtDate(p.savedAt, true) : ''}`;
   $('#sColls').innerHTML = p.collections.map(c => `<button class="text" data-view="${esc(c)}">${esc(c)}</button>`).join('');
+  renderScreenExtras(p);
   $('#sCaption').textContent = p.caption || '';
   $('#sNote').value = p.note || '';
   $('#sOpen').href = postUrl(p);
@@ -1353,6 +1781,9 @@ function openSettings() {
     $('#dStats').textContent = `${all.length} posts, ${state.db.collections.length} collecties, ${all.filter(p => p.hidden).length} verborgen.`;
   }
   updateSyncUi();
+  $('#aiKey').value = store.get('ak', '');
+  $('#aiMsg').textContent = '';
+  updateLabelUi();
   $('#settings').showModal();
 }
 function readGhForm() {
@@ -1470,6 +1901,28 @@ function bind() {
     if (!state.db) return;
     e.preventDefault(); dragDepth = 0; $('#drop').hidden = true;
     await importFiles(e.dataTransfer.files);
+  });
+
+  // Filters
+  $('#facets').addEventListener('click', onFacetClick);
+  $('#active').addEventListener('click', onActiveClick);
+  $('#btnFilters').addEventListener('click', () => document.body.classList.toggle('filters-open'));
+  $('#screen').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-sf], [data-hex]');
+    if (!b) return;
+    if (b.dataset.hex) {
+      try { await navigator.clipboard.writeText(b.dataset.hex); toast(`${b.dataset.hex} gekopieerd.`); } catch { toast('Kopiëren lukte niet.'); }
+      return;
+    }
+    filterFromScreen(b.dataset.sf, b.dataset.v);
+  });
+  // AI-labels
+  $('#aiRun').addEventListener('click', () => { $('#settings').close(); runLabeling(); });
+  $('#aiSave').addEventListener('click', () => {
+    const k = $('#aiKey').value.trim();
+    if (k) store.set('ak', k); else store.del('ak');
+    $('#aiMsg').textContent = k ? 'Sleutel bewaard in deze browser.' : 'Sleutel verwijderd.';
+    $('#aiMsg').className = 'msg ok';
   });
 
   // Sync

@@ -47,9 +47,12 @@
         <nav id="tags" class="list small" aria-label="Tags"></nav>
       </div>
 
+      <div id="facets" class="facets"></div>
+
       <div class="rail-foot">
         <span id="status" class="status"></span>
         <div class="rail-actions">
+          <button id="btnFilters" class="text only-mobile">filters</button>
           <button id="btnSync" class="text" hidden>sync instagram</button>
           <button id="btnImport" class="text">importeer</button>
           <button id="btnSettings" class="text">instellingen</button>
@@ -75,6 +78,7 @@
         </div>
       </div>
 
+      <div id="active" class="active" hidden></div>
       <div id="wall" class="wall"></div>
       <ol id="index" class="index" hidden></ol>
       <div id="empty" class="empty" hidden></div>
@@ -96,6 +100,9 @@
       <a id="sOwner" class="owner" target="_blank" rel="noopener"></a>
       <div id="sMeta" class="dim small"></div>
       <div id="sColls" class="small"></div>
+      <div id="sAudio" class="small"></div>
+      <div id="sPal" class="pal"></div>
+      <div id="sLabels" class="labels small"></div>
       <p id="sCaption" class="caption"></p>
 
       <div class="field">
@@ -151,6 +158,18 @@
           <button type="button" id="xSync" class="text">sync nu</button>
           <button type="button" id="xFull" class="text">alles opnieuw synchroniseren</button>
         </div>
+      </section>
+
+      <section class="needs-unlock">
+        <h3>AI-labels</h3>
+        <p class="dim small">Claude kijkt naar elke thumbnail en geeft labels voor soort, techniek, sfeer, licht en onderwerp. Daarvoor gaan de thumbnails, accountnamen en captions naar Anthropic. Je gebruikt je eigen API-sleutel (console.anthropic.com); die blijft in deze browser.</p>
+        <label>Claude API-sleutel<input id="aiKey" class="line" type="password" placeholder="sk-ant-…" autocomplete="off"></label>
+        <div class="row">
+          <button type="button" id="aiSave" class="text">bewaar sleutel</button>
+          <button type="button" id="aiRun" class="solid">label posts</button>
+        </div>
+        <p id="aiStatus" class="dim small"></p>
+        <p id="aiMsg" class="msg"></p>
       </section>
 
       <section class="needs-unlock">
