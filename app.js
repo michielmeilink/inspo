@@ -629,6 +629,7 @@ async function runSync() {
   const incremental = !!db.syncedAt;
   const start = Date.now();
   let order = 0, added = 0, made = 0, failedInRow = 0, batch = [];
+  const skipped = [];
 
   const flush = async () => {
     if (!batch.length) return;
@@ -704,7 +705,13 @@ async function runSync() {
         if (sync.stop) break;
         if (!db.collections.includes(c.name)) db.collections.push(c.name);
         await politePause();
-        await walk((maxId) => extCall('collectionPage', { id: c.id, maxId }), c.name, `collectie ${c.name}`);
+        try {
+          await walk((maxId) => extCall('collectionPage', { id: c.id, maxId }), c.name, `collectie ${c.name}`);
+        } catch (e) {
+          // Een collectie die Instagram niet (meer) teruggeeft, slaan we over; de rest gaat door.
+          if (e.code !== 'gone' && e.code !== 'http') throw e;
+          skipped.push(c.name);
+        }
       }
     }
     // Posts die niet (meer) in je saved-feed staan: los opvragen, maximaal 120 per sync.
@@ -720,6 +727,7 @@ async function runSync() {
         if (m.thumb) await makeThumb(p, m.thumb);
       } catch (e) {
         if (e.code === 'gone') { p.gone = true; continue; }
+        if (e.code === 'http') continue;   // losse post die nu niet lukt: volgende sync opnieuw
         throw e;
       }
     }
@@ -729,7 +737,8 @@ async function runSync() {
     const left = missingThumbs();
     toast(sync.stop
       ? `Sync gestopt na ${made} thumbnails. De volgende sync gaat verder.`
-      : `Sync klaar: ${added} nieuwe posts, ${made} thumbnails${left ? `, ${left} posts nog zonder` : ''}.`);
+      : `Sync klaar: ${added} nieuwe posts, ${made} thumbnails${left ? `, ${left} posts nog zonder` : ''}.`
+        + (skipped.length ? ` Overgeslagen collectie${skipped.length > 1 ? 's' : ''}: ${skipped.join(', ')}.` : ''), skipped.length ? 9000 : 3800);
   } catch (e) {
     sync.lastError = e.message;
     try { await flush(); } catch (e2) { sync.lastError += ` (opslaan mislukte ook: ${e2.message})`; }
