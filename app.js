@@ -372,6 +372,8 @@ async function unlock(pw, remember) {
   if (!state.blob) save();
   else setStatus(ghOk() ? 'gesynchroniseerd' : 'niet gekoppeld aan GitHub', ghOk() ? 'ok' : 'warn');
   if (!Object.keys(state.db.posts).length) showEmptyHint();
+  initNav();
+  render();
   updateSyncUi();
   maybeAutoSync();
   return true;
@@ -1000,6 +1002,7 @@ window.addEventListener('message', (e) => {
   const rec = frames.get(e.source);
   if (!rec || rec.measured) return;
   rec.measured = true;
+  if (rec.cached) { rec.iframe.classList.add('in'); return; }
   const a = (d.details.height - HEAD - FOOT) / rec.iframe.offsetWidth;
   if (!(a > 0.3 && a < 2.2)) return;
   arCache[rec.p.code] = Math.round(a * 1000) / 1000;
@@ -1047,13 +1050,12 @@ function mountEmbed(crop, p, force = false) {
   f.tabIndex = -1;
   f.title = p.owner ? '@' + p.owner : p.code;
   f.setAttribute('scrolling', 'no');
-  const rec = { iframe: f, crop, p, measured: false };
   const cached = arCache[p.code];
-  if (cached) { rec.measured = true; fitEmbed(crop, f, p, cached); }
+  const rec = { iframe: f, crop, p, measured: false, cached: !!cached };
+  if (cached) fitEmbed(crop, f, p, cached);
   crop.append(f);
   frames.set(f.contentWindow, rec);
   f.addEventListener('load', () => {
-    if (cached) f.classList.add('in');
     setTimeout(() => {
       if (!rec.measured && f.isConnected) { goneCache.add(p.code); persistFit(); markGone(crop, p); }
     }, 7000);
@@ -1132,10 +1134,61 @@ function placePeek(x, y) {
 }
 function hidePeek() { clearTimeout(peekTimer); $('#peek').hidden = true; }
 
+/* ---------- Geschiedenis ----------
+ * Elke collectie, tag of weergave is een stap in de browsergeschiedenis, net als een geopende post.
+ * Zo gaat de terugknop (ook de veeggebaar op mobiel) naar de vorige stap in plaats van de site uit. */
+let fromHistory = false;
+const navState = () => ({ view: state.view, tag: state.tag, mode: state.mode });
+function navUrl(st, code) {
+  const q = new URLSearchParams();
+  if (st.view && st.view !== 'all') q.set('c', st.view);
+  if (st.tag) q.set('t', st.tag);
+  if (st.mode === 'index') q.set('m', 'index');
+  const qs = q.toString();
+  return location.pathname + (qs ? '?' + qs : '') + (code ? '#' + code : '');
+}
+function pushNav() {
+  if (fromHistory) return;
+  const st = navState();
+  const cur = history.state || {};
+  if (cur.view === st.view && cur.tag === st.tag && cur.mode === st.mode && !cur.post) return;
+  history.pushState(st, '', navUrl(st));
+}
+function initNav() {
+  const q = new URLSearchParams(location.search);
+  if (q.has('c')) state.view = q.get('c');
+  if (q.has('t')) state.tag = q.get('t');
+  if (q.get('m') === 'index') state.mode = 'index';
+  history.replaceState(navState(), '', navUrl(navState()));
+}
+window.addEventListener('popstate', (e) => {
+  if (!state.db) return;
+  const st = e.state || { view: 'all', tag: null, mode: state.mode };
+  fromHistory = true;
+  try {
+    const changed = (st.view || 'all') !== state.view || (st.tag || null) !== state.tag || (st.mode && st.mode !== state.mode);
+    if (!$('#screen').hidden && !st.post) closeScreen(!changed);
+    state.view = st.view || 'all'; state.tag = st.tag || null;
+    if (st.mode) state.mode = st.mode;
+    store.set('view', state.view);
+    if (changed) { render(); scrollTo({ top: 0 }); }
+    if (st.post) {
+      if (changed || !state.list.length) state.list = computeList();
+      const i = state.list.findIndex(p => p.code === st.post);
+      if (i >= 0) openPost(i);
+    }
+  } finally { fromHistory = false; }
+});
+
 /* ---------- Screening ---------- */
 function openPost(i) {
   const p = state.list[i];
   if (!p) return;
+  if (!fromHistory) {
+    const st = { ...navState(), post: p.code };
+    if ((history.state || {}).post) history.replaceState(st, '', navUrl(st, p.code));
+    else history.pushState(st, '', navUrl(st, p.code));
+  }
   hidePeek();
   state.openIdx = i;
   const scr = $('#screen');
@@ -1161,6 +1214,8 @@ function renderScreenTags(p) {
   $('#sTags').innerHTML = p.tags.map(t => `<button class="text" data-rm="${esc(t)}" title="verwijder tag">#${esc(t)}</button>`).join('');
 }
 function closeScreen(rerender = true) {
+  // Gesloten via knop of Esc: de geschiedenisstap van de post terugnemen.
+  if (!fromHistory && (history.state || {}).post) { history.back(); return; }
   const i = state.openIdx;
   $('#screen').hidden = true;
   document.body.style.overflow = '';
@@ -1208,7 +1263,7 @@ function setCols(n) {
   document.documentElement.style.setProperty('--cols', n);
   $('#cols').value = n;
 }
-function setView(v) { state.view = v; store.set('view', v); state.tag = null; render(); scrollTo({ top: 0 }); }
+function setView(v) { state.view = v; store.set('view', v); state.tag = null; pushNav(); render(); scrollTo({ top: 0 }); }
 
 function bind() {
   setCols(store.get('cols', 6));
@@ -1229,14 +1284,14 @@ function bind() {
   $('#colls').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setView(b.dataset.view); });
   $('#tags').addEventListener('click', (e) => {
     const b = e.target.closest('[data-tag]'); if (!b) return;
-    state.tag = state.tag === b.dataset.tag ? null : b.dataset.tag; render(); scrollTo({ top: 0 });
+    state.tag = state.tag === b.dataset.tag ? null : b.dataset.tag; pushNav(); render(); scrollTo({ top: 0 });
   });
   let qTimer;
   $('#q').addEventListener('input', (e) => { clearTimeout(qTimer); qTimer = setTimeout(() => { state.q = e.target.value; render(); }, 140); });
   $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; store.set('sort', state.sort); render(); });
   $('#cols').addEventListener('input', (e) => { setCols(+e.target.value); store.set('cols', +e.target.value); });
-  $('#modeWall').addEventListener('click', () => { state.mode = 'wall'; store.set('mode', 'wall'); render(); });
-  $('#modeIndex').addEventListener('click', () => { state.mode = 'index'; store.set('mode', 'index'); render(); });
+  $('#modeWall').addEventListener('click', () => { state.mode = 'wall'; store.set('mode', 'wall'); pushNav(); render(); });
+  $('#modeIndex').addEventListener('click', () => { state.mode = 'index'; store.set('mode', 'index'); pushNav(); render(); });
 
   $('#wall').addEventListener('click', (e) => { const t = e.target.closest('.tile'); if (t) openPost(+t.dataset.i); });
   const idx = $('#index');
@@ -1252,7 +1307,13 @@ function bind() {
   $('#sClose').addEventListener('click', () => closeScreen());
   $('#sPrev').addEventListener('click', () => openPost(state.openIdx - 1));
   $('#sNext').addEventListener('click', () => openPost(state.openIdx + 1));
-  $('#sColls').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) { closeScreen(false); setView(b.dataset.view); } });
+  $('#sColls').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-view]');
+    if (!b) return;
+    fromHistory = true; closeScreen(false); fromHistory = false;
+    history.replaceState(navState(), '', navUrl(navState()));
+    setView(b.dataset.view);
+  });
   $('#sNote').addEventListener('input', (e) => editPost(p => { p.note = e.target.value; }));
   $('#sTagIn').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ',') return;
