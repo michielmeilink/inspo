@@ -34,14 +34,17 @@ Post = { code, type: 'reel'|'p'|'tv', owner, caption, savedAt, takenAt, collecti
 - **Export-parser** (`parseExport`): leest `saved_posts.json` en `saved_collections.json` uit een Instagram-export (zip of losse json). Hij werkt robuust voor zowel het oude formaat (`string_map_data`) als het nieuwe (`label_values`, met Nederlandse labels zoals "Onderschrift" en "Gebruikersnaam").
   - `fixText` herstelt UTF-8-tekst die als latin-1 is opgeslagen ("Ã©" wordt "é").
 - **Extensie-brug**: `extCall(cmd, args)` via `window.postMessage`. Het content script zet `data-inspo-ext` op `<html>` en meldt zich met `{__inspo:'ready'}`.
-- **Sync** (`runSync`): de saved-feed, daarna de collecties en tot slot de thumbnails.
-  - De eerste keer gaat hij alles door. Daarna is hij incrementeel: hij stopt bij een pagina zonder nieuwe items.
-  - Automatisch als `syncedAt` meer dan 6 uur geleden is.
+- **Sync** (`runSync`): eerst de saved-feed, dan elke collectie. Thumbnails worden **per pagina meteen** gemaakt en elke 40 gecommit (samen met `data.enc`). Onderbreken (herladen, stoppen) kost dus hooguit 40 thumbnails.
+  - Een pagina telt als werk als er nieuwe posts, nieuwe collectie-koppelingen of ontbrekende thumbnails in staan. Een incrementele sync stopt bij de eerste pagina zonder werk, waardoor een onderbroken sync vanzelf verdergaat.
+  - Posts die niet meer in de feed staan, worden daarna los opgevraagd via `media`, maximaal 120 per sync. Bij een 404 krijgen ze `gone`.
+  - `db.syncStartedAt` wordt gezet bij de start en verwijderd als de sync klaar is. `maybeAutoSync` hervat een onderbroken sync, en start elke 6 uur na `syncedAt`.
+  - Mislukken 6 thumbnail-downloads achter elkaar, dan stopt de sync met een duidelijke fout. Die blijft staan in `sync.lastError`: rood linksonder en in de instellingen.
   - Tussen verzoeken aan Instagram zit een pauze van 1,4 tot 3 seconden (`politePause`).
+  - Les van 26 nov 2026: de eerste versie maakte pas thumbnails na de hele feed-walk. Een herlaad tussendoor leverde zo 0 thumbnails op, en dat zag je als witte en lege tegels.
 - **Embed-fallback** (geen thumbnail): de officiële Instagram-embed in een iframe, bijgesneden met container-query-eenheden.
   - De embed stuurt een `MEASURE`-postMessage met zijn hoogte. Met kop 57 px en voet ongeveer 151 px volgt daaruit de beeldverhouding (`fitEmbed`).
   - Komt er binnen 7 seconden na het laden geen `MEASURE`, dan is de post verwijderd of afgeschermd ("niet meer beschikbaar").
-  - De iframe wordt pas zichtbaar na `MEASURE`, om witte vlakken te voorkomen.
+  - De iframe wordt pas 1 seconde na `MEASURE` zichtbaar, om witte vlakken te voorkomen (het beeld in de embed laadt na de meting).
 - **Weergaven**: wall (tegels in 9:16 met 2px naad, 3 tot 10 kolommen) en index (tekstlijst met een preview bij hover).
 - **Speler** (`setupStage`/`mountPlayer`): met extensie een eigen `<video>` met een verse video-URL uit `media`-info. Er is een tijdlijn (scrubben, hover-tijd, resterende tijd), snelheid, geluid en carousel-bolletjes.
   - Sneltoetsen: k of spatie, j en l (±5 s), komma en punt (frame), m (geluid), ← → (vorige/volgende post), Esc. Carousels: ↑ ↓ vorige/volgende slide (zoals knippunten in Premiere/Resolve), 1–9 direct naar een slide, klikvlakken links/rechts op het beeld, vegen op touch, teller rechtsboven, buren worden voorgeladen. Op de wall krijgen carousels een markering met het aantal slides. De sneltoetstekst onder de notitie past zich aan (`setKeysHint`).
@@ -53,7 +56,7 @@ Post = { code, type: 'reel'|'p'|'tv', owner, caption, savedAt, takenAt, collecti
 - `bridge.js`: content script op `inspo.michielmeilink.com` en `localhost:8765`, relayt naar de background.
 - `background.js` gebruikt de interne web-API van Instagram met het app-id van instagram.com (`X-IG-App-ID: 936619743392459`), in Michiels eigen sessie.
   - Eerst probeert hij `fetch` direct vanuit de extensie. Bij 401/403 of een antwoord dat geen JSON is, voert hij het verzoek uit in een instagram.com-tab via `chrome.scripting.executeScript({world:'MAIN'})`.
-  - Commando's: `ping`, `media` (`/api/v1/media/{id}/info/`; het id volgt uit de shortcode via base64-decode), `savedPage` (`/api/v1/feed/saved/posts/`), `collections` (`/api/v1/collections/list/`), `collectionPage` (`/api/v1/feed/collection/{id}/posts/`) en `bytes` (CDN-afbeelding als base64, alleen `cdninstagram.com`/`fbcdn.net`).
+  - Commando's: `ping`, `media` (`/api/v1/media/{id}/info/`; het id volgt uit de shortcode via base64-decode), `savedPage` (`/api/v1/feed/saved/posts/`), `collections` (`/api/v1/collections/list/`), `collectionPage` (`/api/v1/feed/collection/{id}/posts/`) en `bytes` (CDN-afbeelding als base64, alleen `cdninstagram.com`/`fbcdn.net`; lukt dat direct niet, dan via de instagram.com-tab).
   - Foutcodes: `rate` (429), `login`, `gone`, `http`. Het dashboard toont die als melding.
 - Na een wijziging aan de extensie moet Michiel in `chrome://extensions` op herladen klikken.
 - Dit is niet getest tegen een echte Instagram-sessie vanuit Claude. Michiel heeft bevestigd dat de sync werkt (26 nov 2026). De interne API van Instagram kan veranderen.

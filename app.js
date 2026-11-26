@@ -321,7 +321,7 @@ const nextFrame = () => new Promise(r => requestAnimationFrame(() => r()));
 let saveTimer = null;
 function setStatus(text, cls = '') { const el = $('#status'); el.textContent = text; el.className = 'status ' + cls; }
 function markDirty() { setStatus('niet opgeslagen', 'warn'); clearTimeout(saveTimer); saveTimer = setTimeout(save, 1200); }
-window.addEventListener('beforeunload', (e) => { if (saveTimer || state.saving) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', (e) => { if (saveTimer || state.saving || sync.running) { e.preventDefault(); e.returnValue = ''; } });
 
 async function save() {
   saveTimer = null;
@@ -345,7 +345,8 @@ async function save() {
           await ghPut(blob);
         }
       });
-      if (!sync.running) setStatus('opgeslagen', 'ok');
+      if (sync.lastError) setStatus('sync gestopt: ' + sync.lastError, 'err');
+      else if (!sync.running) setStatus('opgeslagen', 'ok');
     } else {
       setStatus('alleen in deze browser opgeslagen', 'warn');
     }
@@ -571,7 +572,7 @@ async function ghCommitFiles(files, message) {
 }
 
 /* ---------- Sync met Instagram ---------- */
-const sync = { running: false, stop: false };
+const sync = { running: false, stop: false, lastError: '' };
 const pause = (ms) => new Promise(r => setTimeout(r, ms));
 const politePause = () => pause(1400 + Math.random() * 1600);
 function typeFromMedia(m, fallback) {
@@ -594,54 +595,45 @@ function applyMeta(p, m) {
   if (p.gone) { p.gone = false; changed = true; }
   return changed;
 }
+function missingThumbs() { return state.db ? Object.values(state.db.posts).filter(p => !p.thumb && !p.gone && !p.hidden).length : 0; }
 function updateSyncUi() {
   const b = $('#btnSync');
   if (b) { b.hidden = !ext.ready || !state.db; b.textContent = sync.running ? 'stop sync' : 'sync instagram'; }
   const s = $('#xStatus');
   if (s) {
-    s.textContent = ext.ready
-      ? `Extensie ${ext.version} is actief in deze browser.${state.db && state.db.syncedAt ? ' Laatste sync: ' + fmtDate(state.db.syncedAt, true) + '.' : ' Nog niet gesynchroniseerd.'}`
-      : 'De extensie is niet gevonden in deze browser.';
+    if (!ext.ready) { s.textContent = 'De extensie is niet gevonden in deze browser.'; return; }
+    if (!state.db) { s.textContent = `Extensie ${ext.version} is actief.`; return; }
+    const miss = missingThumbs();
+    s.textContent = `Extensie ${ext.version} is actief. `
+      + (state.db.syncedAt ? `Laatste volledige sync: ${fmtDate(state.db.syncedAt, true)}. ` : 'Nog geen volledige sync. ')
+      + (miss ? `${miss} posts hebben nog geen thumbnail.` : 'Alle posts hebben een thumbnail.')
+      + (sync.lastError ? ` Laatste fout: ${sync.lastError}` : '');
   }
 }
 function maybeAutoSync() {
-  if (state.db && ext.ready && ghOk() && state.db.syncedAt && Date.now() - state.db.syncedAt > 6 * 3600e3) runSync();
-}
-async function walkFeed(fetchPage, onItems, label, incremental) {
-  let next = null, page = 0;
-  do {
-    if (sync.stop) return;
-    progress(-1, `${label}, pagina ${++page}`);
-    const r = await fetchPage(next);
-    const fresh = onItems(r.items || []);
-    next = r.next;
-    if (incremental && fresh === 0) break;
-    if (next) await politePause();
-  } while (next);
+  if (!state.db || !ext.ready || !ghOk() || sync.running) return;
+  const db = state.db;
+  // Automatisch: elke 6 uur, of meteen verder als een eerdere sync halverwege is gestopt (bijv. door herladen).
+  const due = db.syncedAt ? Date.now() - db.syncedAt > 6 * 3600e3 : !!db.syncStartedAt;
+  if (due) runSync();
 }
 
 async function runSync() {
-  if (sync.running) { sync.stop = true; setStatus('sync stopt na deze stap…'); return; }
-  if (!ext.ready) return toast('Installeer eerst de inspo-extensie in Chrome.');
+  if (sync.running) { sync.stop = true; progress(-1, 'sync stopt na deze stap…'); return; }
+  if (!ext.ready) return toast('Installeer eerst de inspo-extensie.');
   if (!ghOk()) return toast('Koppel eerst GitHub in instellingen. Daar worden de thumbnails bewaard.');
-  sync.running = true; sync.stop = false; updateSyncUi();
+  sync.running = true; sync.stop = false; sync.lastError = '';
+  updateSyncUi();
   const db = state.db;
+  if (!db.syncStartedAt) db.syncStartedAt = Date.now();
   const incremental = !!db.syncedAt;
-  const meta = new Map();
   const start = Date.now();
-  let order = 0, added = 0, batch = [];
+  let order = 0, added = 0, made = 0, failedInRow = 0, batch = [];
 
-  const ensure = (m) => {
-    if (!db.posts[m.code]) {
-      addPost(db, { code: m.code, type: typeFromMedia(m, 'p'), owner: m.owner, caption: m.caption, savedAt: start - (order++) * 1000 });
-      added++;
-      return true;
-    }
-    return false;
-  };
   const flush = async () => {
     if (!batch.length) return;
     const files = batch; batch = [];
+    progress(-1, `${files.length} thumbnails opslaan…`);
     await ghLocked(async () => {
       const remote = await ghGet();
       if (remote) mergeInto(state.db, await decryptDb(remote, state.password));
@@ -654,78 +646,100 @@ async function runSync() {
     });
     clearTimeout(saveTimer); saveTimer = null;
     refreshThumbs();
+    updateSyncUi();
+  };
+  const ensure = (m) => {
+    if (db.posts[m.code]) return false;
+    addPost(db, { code: m.code, type: typeFromMedia(m, 'p'), owner: m.owner, caption: m.caption, savedAt: start - (order++) * 1000 });
+    added++;
+    return true;
+  };
+  const makeThumb = async (p, url) => {
+    try {
+      const { b64: data, mime } = await extCall('bytes', { url });
+      const jpg = await toJpeg(unb64(data), mime, 420);
+      const name = await thumbName(p.code);
+      thumbMem.set(name, URL.createObjectURL(new Blob([jpg], { type: 'image/jpeg' })));
+      batch.push({ path: `thumbs/${name}.bin`, b64: b64(await encThumb(jpg)) });
+      p.thumb = name;
+      made++; failedInRow = 0;
+    } catch (e) {
+      // Eén mislukte download slaan we over; blijft het misgaan, dan stoppen we met een duidelijke fout.
+      if (++failedInRow >= 6) throw Object.assign(new Error(`thumbnails downloaden lukt niet (${e.message})`), { code: e.code || 'thumb' });
+      return;
+    }
+    if (batch.length >= 40) await flush();
+  };
+  // Eén pagina verwerken: posts bijwerken en meteen thumbnails maken. Geeft terug hoeveel er te doen was.
+  const handle = async (items, collection) => {
+    let work = 0;
+    for (const m of items) {
+      if (sync.stop) break;
+      if (ensure(m)) work++;
+      const p = db.posts[m.code];
+      if (collection && !p.collections.includes(collection)) { p.collections.push(collection); work++; }
+      applyMeta(p, m);
+      if (!p.thumb && !p.hidden && m.thumb) { work++; await makeThumb(p, m.thumb); await pause(60); }
+    }
+    return work;
+  };
+  const walk = async (fetchPage, collection, label) => {
+    let next = null, page = 0;
+    do {
+      if (sync.stop) return;
+      progress(-1, `${label}, pagina ${++page}${made ? `, ${made} thumbnails` : ''}`);
+      const r = await fetchPage(next);
+      const work = await handle(r.items || [], collection);
+      next = r.next;
+      if (incremental && work === 0) break;   // niets nieuws en alle thumbnails aanwezig
+      if (next) await politePause();
+    } while (next);
   };
 
   try {
-    // 1. Alle opgeslagen posts (nieuwste eerst)
-    await walkFeed((maxId) => extCall('savedPage', { maxId }), (items) => {
-      let fresh = 0;
-      for (const m of items) { meta.set(m.code, m); if (ensure(m)) fresh++; applyMeta(db.posts[m.code], m); }
-      return fresh;
-    }, 'opgeslagen ophalen', incremental);
-
-    // 2. Collecties
+    await walk((maxId) => extCall('savedPage', { maxId }), null, 'opgeslagen');
     if (!sync.stop) {
       const { collections } = await extCall('collections');
       for (const c of collections) {
         if (sync.stop) break;
         if (!db.collections.includes(c.name)) db.collections.push(c.name);
         await politePause();
-        await walkFeed((maxId) => extCall('collectionPage', { id: c.id, maxId }), (items) => {
-          let fresh = 0;
-          for (const m of items) {
-            meta.set(m.code, m); ensure(m);
-            const p = db.posts[m.code];
-            if (!p.collections.includes(c.name)) { p.collections.push(c.name); fresh++; }
-            applyMeta(p, m);
-          }
-          return fresh;
-        }, `collectie ${c.name}`, incremental);
+        await walk((maxId) => extCall('collectionPage', { id: c.id, maxId }), c.name, `collectie ${c.name}`);
       }
     }
-    const y = scrollY; render(); scrollTo(0, y);
-
-    // 3. Thumbnails
-    const todo = Object.values(db.posts).filter(p => !p.thumb && !p.gone && !p.hidden);
-    let n = 0;
-    for (const p of todo) {
+    // Posts die niet (meer) in je saved-feed staan: los opvragen, maximaal 120 per sync.
+    const rest = sync.stop ? [] : Object.values(db.posts).filter(p => !p.thumb && !p.gone && !p.hidden).slice(0, 120);
+    let i = 0;
+    for (const p of rest) {
       if (sync.stop) break;
-      progress(n / Math.max(1, todo.length), `thumbnails ${++n} van ${todo.length}`);
-      let m = meta.get(p.code);
+      progress(i++ / rest.length, `losse posts ${i} van ${rest.length}`);
+      await politePause();
       try {
-        if (!m || !m.thumb) {
-          await politePause();
-          m = (await extCall('media', { code: p.code })).media;
-          meta.set(p.code, m); applyMeta(p, m);
-        }
-        if (!m.thumb) continue;
-        const { b64: data, mime } = await extCall('bytes', { url: m.thumb });
-        const jpg = await toJpeg(unb64(data), mime, 420);
-        const name = await thumbName(p.code);
-        thumbMem.set(name, URL.createObjectURL(new Blob([jpg], { type: 'image/jpeg' })));
-        batch.push({ path: `thumbs/${name}.bin`, b64: b64(await encThumb(jpg)) });
-        p.thumb = name;
-        await pause(100);
+        const m = (await extCall('media', { code: p.code })).media;
+        applyMeta(p, m);
+        if (m.thumb) await makeThumb(p, m.thumb);
       } catch (e) {
         if (e.code === 'gone') { p.gone = true; continue; }
-        if (e.code === 'http' && /Download/.test(e.message)) continue;   // verlopen CDN-link: volgende keer opnieuw
         throw e;
       }
-      if (batch.length >= 40) await flush();
     }
     await flush();
-    if (!sync.stop) db.syncedAt = Date.now();
+    if (!sync.stop) { db.syncedAt = Date.now(); delete db.syncStartedAt; }
     markDirty();
-    toast(sync.stop ? 'Sync gestopt. De rest volgt bij de volgende sync.' : `Sync klaar${added ? `, ${added} nieuwe posts` : ''}.`);
+    const left = missingThumbs();
+    toast(sync.stop
+      ? `Sync gestopt na ${made} thumbnails. De volgende sync gaat verder.`
+      : `Sync klaar: ${added} nieuwe posts, ${made} thumbnails${left ? `, ${left} posts nog zonder` : ''}.`);
   } catch (e) {
-    try { await flush(); } catch {}
+    sync.lastError = e.message;
+    try { await flush(); } catch (e2) { sync.lastError += ` (opslaan mislukte ook: ${e2.message})`; }
     markDirty();
-    setStatus('sync gestopt: ' + e.message, 'err');
-    toast(e.message);
+    toast('Sync gestopt: ' + sync.lastError, 9000);
   } finally {
     progress(null);
     sync.running = false; sync.stop = false;
     updateSyncUi();
+    if (sync.lastError) setStatus('sync gestopt: ' + sync.lastError, 'err');
     const y = scrollY; render(); scrollTo(0, y);
   }
 }
@@ -1080,14 +1094,15 @@ window.addEventListener('message', (e) => {
   const rec = frames.get(e.source);
   if (!rec || rec.measured) return;
   rec.measured = true;
-  if (rec.cached) { rec.iframe.classList.add('in'); return; }
+  // Het beeld in de embed laadt nét na de meting: even wachten voorkomt een wit vlak.
+  if (rec.cached) { setTimeout(() => rec.iframe.classList.add('in'), 1000); return; }
   const a = (d.details.height - HEAD - FOOT) / rec.iframe.offsetWidth;
   if (!(a > 0.3 && a < 2.2)) return;
   arCache[rec.p.code] = Math.round(a * 1000) / 1000;
   goneCache.delete(rec.p.code);
   persistFit();
   fitEmbed(rec.crop, rec.iframe, rec.p, a);
-  rec.iframe.classList.add('in');
+  setTimeout(() => rec.iframe.classList.add('in'), 1000);
 });
 
 function setFit(f, w, left, dy) {
@@ -1313,9 +1328,9 @@ function editPost(fn) {
 
 /* ---------- Toast ---------- */
 let toastTimer;
-function toast(msg) {
+function toast(msg, ms = 3800) {
   const el = $('#toast'); el.textContent = msg; el.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 3800);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 
 /* ---------- Instellingen ---------- */

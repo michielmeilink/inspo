@@ -147,12 +147,34 @@ const handlers = {
   async bytes({ url }) {
     const host = new URL(url).hostname;
     if (!/(^|\.)(cdninstagram\.com|fbcdn\.net)$/.test(host)) throw fail('Host niet toegestaan', 'host');
-    const r = await fetch(url);
-    if (!r.ok) throw fail('Download mislukt (' + r.status + ')', 'http');
-    const buf = new Uint8Array(await r.arrayBuffer());
+    // Eerst direct; lukt dat niet, dan vanuit een instagram.com-tab (zelfde context als Instagram zelf).
+    let res = null, status = 0;
+    try {
+      const r = await fetch(url, { credentials: 'omit' });
+      status = r.status;
+      if (r.ok) res = { buf: new Uint8Array(await r.arrayBuffer()), mime: r.headers.get('content-type') || 'image/jpeg' };
+    } catch (e) { status = e.message; }
+    if (!res) {
+      const tabId = await igTabId();
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'MAIN', args: [url],
+        func: async (u) => {
+          try {
+            const r = await fetch(u, { credentials: 'omit' });
+            if (!r.ok) return { status: r.status };
+            const b = new Uint8Array(await r.arrayBuffer());
+            let s = '';
+            for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+            return { b64: btoa(s), mime: r.headers.get('content-type') || 'image/jpeg' };
+          } catch (e) { return { status: String(e.message || e) }; }
+        },
+      });
+      if (result && result.b64) return { b64: result.b64, mime: result.mime };
+      throw fail(`Download mislukt (${status}${result && result.status ? ', via tab: ' + result.status : ''})`, 'http');
+    }
     let s = '';
-    for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-    return { b64: btoa(s), mime: r.headers.get('content-type') || 'image/jpeg' };
+    for (let i = 0; i < res.buf.length; i += 0x8000) s += String.fromCharCode.apply(null, res.buf.subarray(i, i + 0x8000));
+    return { b64: btoa(s), mime: res.mime };
   },
 };
 
