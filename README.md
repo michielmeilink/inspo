@@ -32,6 +32,24 @@ Instagram → Instellingen → Accountcentrum → *Je informatie en machtigingen
 
 Je krijgt een zip. Sleep die (of `saved_posts.json` + `saved_collections.json`) op het dashboard. Als je opnieuw importeert, worden alleen nieuwe posts toegevoegd. Je tags en notities blijven staan.
 
+## Sync-extensie (Chrome)
+
+De extensie in de map `extension/` doet drie dingen, in je eigen ingelogde browser:
+- je opgeslagen posts en collecties ophalen, zodat nieuwe saves zonder export binnenkomen;
+- echte thumbnails maken. Die gaan versleuteld naar `thumbs/` in de repo en zijn daarna op elk apparaat zichtbaar;
+- video's hier afspelen in een eigen speler met tijdlijn, in plaats van de Instagram-embed.
+
+**Installeren**
+1. Open `chrome://extensions`.
+2. Zet *Ontwikkelaarsmodus* aan (rechtsboven).
+3. Klik op *Uitgepakte extensie laden* en kies de map `extension` uit deze repo.
+4. Zorg dat je op instagram.com bent ingelogd in dezelfde Chrome.
+5. Open het dashboard en klik linksonder op **sync instagram**. De eerste sync duurt een tijdje (alle pagina's en ruim 1000 thumbnails). Daarna synct het dashboard automatisch als de vorige sync meer dan 6 uur geleden is.
+
+De extensie wacht 1,5 tot 3 seconden tussen verzoeken aan Instagram. Krijg je een melding dat Instagram om pauze vraagt, wacht dan een uur.
+
+**Sneltoetsen in de speler:** spatie of `k` afspelen of pauzeren, `j` en `l` 5 seconden terug of vooruit, `,` en `.` één frame terug of vooruit, `m` geluid. Met ← → ga je naar de vorige of volgende post.
+
 ## Op een ander apparaat
 
 Open de site, vul bij *GitHub-koppeling instellen* hetzelfde token in en ontgrendel met je wachtwoord.
@@ -39,7 +57,7 @@ Zonder token kun je alleen kijken, niet opslaan: de site leest dan `data.enc` va
 
 ## Bekende beperkingen
 
-- De beelden zijn de officiële Instagram-embeds, bijgesneden tot alleen het frame. De embed meldt zijn hoogte, en daaruit volgt de uitsnede. Bij staande reels met een liggende video kunnen zwarte balken zichtbaar blijven.
+- Zonder sync zijn de beelden de officiële Instagram-embeds, bijgesneden tot alleen het frame. De embed meldt zijn hoogte, en daaruit volgt de uitsnede. Bij staande reels met een liggende video kunnen zwarte balken zichtbaar blijven.
 - Een embed die nooit zijn hoogte meldt, is een verwijderde of afgeschermde post. Die wordt getoond als "niet meer beschikbaar".
 - Een post die op Instagram verwijderd is, speelt niet meer af.
 

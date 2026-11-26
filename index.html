@@ -50,6 +50,7 @@
       <div class="rail-foot">
         <span id="status" class="status"></span>
         <div class="rail-actions">
+          <button id="btnSync" class="text" hidden>sync instagram</button>
           <button id="btnImport" class="text">importeer</button>
           <button id="btnSettings" class="text">instellingen</button>
         </div>
@@ -108,6 +109,7 @@
         <textarea id="sNote" class="line" rows="4" placeholder="wat neem je hieruit mee?"></textarea>
       </div>
 
+      <p id="sKeys" class="dim small keys" hidden>spatie of k afspelen, j en l 5 seconden terug of vooruit, komma en punt per frame, m geluid</p>
       <div class="screen-actions">
         <a id="sOpen" class="text" target="_blank" rel="noopener">open in instagram</a>
         <button id="sCopy" class="text">kopieer link</button>
@@ -139,6 +141,16 @@
           <button type="button" id="gSave" class="solid">Bewaar koppeling</button>
         </div>
         <p id="gMsg" class="msg"></p>
+      </section>
+
+      <section class="needs-unlock">
+        <h3>Instagram-sync</h3>
+        <p id="xStatus" class="dim small"></p>
+        <p class="dim small">De extensie haalt in je eigen browser je opgeslagen posts, collecties en thumbnails op, en speelt video's hier af met een tijdlijn. Installeren: open <code>chrome://extensions</code>, zet Ontwikkelaarsmodus aan, kies Uitgepakte extensie laden en selecteer de map <code>extension</code> uit de repo.</p>
+        <div class="row">
+          <button type="button" id="xSync" class="text">sync nu</button>
+          <button type="button" id="xFull" class="text">alles opnieuw synchroniseren</button>
+        </div>
       </section>
 
       <section class="needs-unlock">

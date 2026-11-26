@@ -125,14 +125,16 @@ function addPost(db, it) {
   return isNew;
 }
 
-function mergeDb(local, remote) {
-  const out = JSON.parse(JSON.stringify(local));
+function mergeDb(local, remote) { return mergeInto(JSON.parse(JSON.stringify(local)), remote); }
+function mergeInto(out, remote) {
+  if (!out.tk && remote.tk) out.tk = remote.tk;
+  if ((remote.syncedAt || 0) > (out.syncedAt || 0)) out.syncedAt = remote.syncedAt;
   for (const c of remote.collections || []) if (!out.collections.includes(c)) out.collections.push(c);
   for (const [code, rp] of Object.entries(remote.posts || {})) {
     const lp = out.posts[code];
     if (!lp) { out.posts[code] = rp; continue; }
     for (const c of rp.collections || []) if (!lp.collections.includes(c)) lp.collections.push(c);
-    for (const k of ['owner', 'caption', 'thumb']) if (!lp[k] && rp[k]) lp[k] = rp[k];
+    for (const k of ['owner', 'caption', 'thumb', 'w', 'h', 'dur', 'mt', 'takenAt']) if (!lp[k] && rp[k]) lp[k] = rp[k];
     if ((rp.savedAt || 0) > (lp.savedAt || 0)) lp.savedAt = rp.savedAt;
     if ((rp.editedAt || 0) > (lp.editedAt || 0)) {
       lp.tags = rp.tags || []; lp.note = rp.note || ''; lp.hidden = !!rp.hidden; lp.editedAt = rp.editedAt;
@@ -298,18 +300,19 @@ async function save() {
     let blob = await encryptDb(state.db, state.password);
     store.set('cache', blob);
     if (ghOk()) {
-      try { await ghPut(blob); }
-      catch (e) {
-        if (!e.conflict) throw e;
-        // Remote is intussen gewijzigd (bijv. door de sync-extensie): samenvoegen en opnieuw proberen
-        const remote = await ghGet();
-        if (remote) state.db = mergeDb(state.db, await decryptDb(remote, state.password));
-        render();
-        blob = await encryptDb(state.db, state.password);
-        store.set('cache', blob);
-        await ghPut(blob);
-      }
-      setStatus('opgeslagen', 'ok');
+      await ghLocked(async () => {
+        try { await ghPut(blob); }
+        catch (e) {
+          if (!e.conflict) throw e;
+          // Remote is intussen gewijzigd (ander apparaat of sync): samenvoegen en opnieuw proberen
+          const remote = await ghGet();
+          if (remote) mergeInto(state.db, await decryptDb(remote, state.password));
+          blob = await encryptDb(state.db, state.password);
+          store.set('cache', blob);
+          await ghPut(blob);
+        }
+      });
+      if (!sync.running) setStatus('opgeslagen', 'ok');
     } else {
       setStatus('alleen in deze browser opgeslagen', 'warn');
     }
@@ -369,6 +372,518 @@ async function unlock(pw, remember) {
   if (!state.blob) save();
   else setStatus(ghOk() ? 'gesynchroniseerd' : 'niet gekoppeld aan GitHub', ghOk() ? 'ok' : 'warn');
   if (!Object.keys(state.db.posts).length) showEmptyHint();
+  updateSyncUi();
+  maybeAutoSync();
+  return true;
+}
+
+/* ---------- Extensie-brug ----------
+ * De inspo-extensie zet een content script op deze pagina. We praten ermee via window.postMessage. */
+const ext = { ready: false, version: null, seq: 0, pending: new Map() };
+function extCall(cmd, args = {}, timeout = 45000) {
+  return new Promise((resolve, reject) => {
+    if (!ext.ready) return reject(Object.assign(new Error('De inspo-extensie is niet gevonden.'), { code: 'noext' }));
+    const id = ++ext.seq;
+    const t = setTimeout(() => {
+      ext.pending.delete(id);
+      reject(Object.assign(new Error('De extensie reageert niet.'), { code: 'timeout' }));
+    }, timeout);
+    ext.pending.set(id, { resolve, reject, t });
+    window.postMessage({ __inspo: 'req', id, cmd, args }, location.origin);
+  });
+}
+window.addEventListener('message', (e) => {
+  if (e.source !== window || e.origin !== location.origin) return;
+  const d = e.data;
+  if (!d) return;
+  if (d.__inspo === 'ready') {
+    const first = !ext.ready;
+    ext.ready = true; ext.version = d.version;
+    if (first) { document.body.classList.add('has-ext'); updateSyncUi(); maybeAutoSync(); }
+  } else if (d.__inspo === 'res') {
+    const p = ext.pending.get(d.id);
+    if (!p) return;
+    ext.pending.delete(d.id); clearTimeout(p.t);
+    if (d.ok) p.resolve(d);
+    else p.reject(Object.assign(new Error(d.error || 'Fout in de extensie.'), { code: d.code }));
+  }
+});
+
+/* ---------- Thumbnails (versleuteld in de repo) ----------
+ * Sleutel: willekeurige 32 bytes in de (versleutelde) database, dus los van je wachtwoord.
+ * Bestandsnaam: HMAC van de post-code, zodat de repo niet verraadt welke posts het zijn. */
+let tkeys = null;
+async function thumbKeys() {
+  if (tkeys) return tkeys;
+  if (!state.db.tk) state.db.tk = b64(crypto.getRandomValues(new Uint8Array(32)));
+  const base = await crypto.subtle.importKey('raw', unb64(state.db.tk), 'HKDF', false, ['deriveKey']);
+  const info = (s) => ({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: te.encode(s) });
+  tkeys = {
+    aes: await crypto.subtle.deriveKey(info('inspo-thumb-aes'), base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']),
+    mac: await crypto.subtle.deriveKey(info('inspo-thumb-name'), base, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, ['sign']),
+  };
+  return tkeys;
+}
+async function thumbName(code) {
+  const k = await thumbKeys();
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', k.mac, te.encode(code)));
+  return [...sig.slice(0, 12)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+async function encThumb(bytes) {
+  const k = await thumbKeys();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k.aes, bytes));
+  const out = new Uint8Array(12 + ct.length);
+  out.set(iv); out.set(ct, 12);
+  return out;
+}
+async function decThumb(buf) {
+  const k = await thumbKeys();
+  const b = new Uint8Array(buf);
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.subarray(0, 12) }, k.aes, b.subarray(12));
+}
+async function toJpeg(bytes, mime, maxW) {
+  const bmp = await createImageBitmap(new Blob([bytes], { type: mime }));
+  const scale = Math.min(1, maxW / bmp.width);
+  const c = new OffscreenCanvas(Math.max(1, Math.round(bmp.width * scale)), Math.max(1, Math.round(bmp.height * scale)));
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  const blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+const thumbMem = new Map();      // naam -> object-URL
+const thumbPending = new Map();  // naam -> Promise
+function thumbUrl(name) {
+  if (thumbMem.has(name)) return Promise.resolve(thumbMem.get(name));
+  if (thumbPending.has(name)) return thumbPending.get(name);
+  const job = (async () => {
+    const c = gh() || DEFAULT_GH;
+    const branch = c.branch || 'main';
+    let r = await fetch(`https://raw.githubusercontent.com/${c.owner}/${c.repo}/${branch}/thumbs/${name}.bin`);
+    if (!r.ok && ghOk()) r = await fetch(`${ghUrl(c, `thumbs/${name}.bin`)}?ref=${encodeURIComponent(branch)}`, { headers: ghHeaders(c, 'application/vnd.github.raw+json') });
+    if (!r.ok) throw new Error('thumbnail ' + r.status);
+    const plain = await decThumb(await r.arrayBuffer());
+    const url = URL.createObjectURL(new Blob([plain], { type: 'image/jpeg' }));
+    thumbMem.set(name, url);
+    return url;
+  })();
+  thumbPending.set(name, job);
+  job.finally(() => thumbPending.delete(name)).catch(() => {});
+  return job;
+}
+const thumbIO = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    thumbIO.unobserve(e.target);
+    const host = e.target.closest('[data-i]');
+    showThumb(e.target, host ? state.list[+host.dataset.i] : null);
+  }
+}, { rootMargin: '1200px 0px' });
+async function showThumb(crop, p) {
+  const img = crop.querySelector('img[data-thumb]');
+  if (!img) return;
+  try {
+    img.addEventListener('load', () => img.classList.add('in'), { once: true });
+    img.src = await thumbUrl(img.dataset.thumb);
+  } catch {
+    img.remove();
+    crop.classList.remove('thumb');
+    if (p) mountEmbed(crop, p);
+  }
+}
+function refreshThumbs() {
+  for (const tile of $$('#wall .tile')) {
+    const p = state.list[+tile.dataset.i];
+    const crop = tile.querySelector('.crop');
+    if (!p || !p.thumb || crop.classList.contains('thumb')) continue;
+    unmountEmbed(crop);
+    crop.outerHTML = cropHtml(p);
+    showThumb(tile.querySelector('.crop'), p);
+  }
+}
+
+/* ---------- GitHub: meerdere bestanden in één commit ---------- */
+let ghChain = Promise.resolve();
+function ghLocked(fn) { const run = ghChain.then(fn, fn); ghChain = run.catch(() => {}); return run; }
+async function ghJson(url, opts = {}) {
+  const c = gh();
+  const r = await fetch(url, { ...opts, headers: { ...ghHeaders(c), 'Content-Type': 'application/json' }, cache: 'no-store' });
+  if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; throw e; }
+  return r.json();
+}
+async function ghCommitFiles(files, message) {
+  const c = gh();
+  const base = `https://api.github.com/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/git`;
+  const branch = c.branch || 'main';
+  const tree = [];
+  for (const f of files) {
+    const blob = await ghJson(`${base}/blobs`, { method: 'POST', body: JSON.stringify({ content: f.b64, encoding: 'base64' }) });
+    f.sha = blob.sha;
+    tree.push({ path: f.path, mode: '100644', type: 'blob', sha: blob.sha });
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ref = await ghJson(`${base}/ref/heads/${branch}`);
+    const head = await ghJson(`${base}/commits/${ref.object.sha}`);
+    const t = await ghJson(`${base}/trees`, { method: 'POST', body: JSON.stringify({ base_tree: head.tree.sha, tree }) });
+    const cm = await ghJson(`${base}/commits`, { method: 'POST', body: JSON.stringify({ message, tree: t.sha, parents: [ref.object.sha] }) });
+    try {
+      await ghJson(`${base}/refs/heads/${branch}`, { method: 'PATCH', body: JSON.stringify({ sha: cm.sha }) });
+      return;
+    } catch (e) {
+      if (e.status !== 422 || attempt === 2) throw e;
+    }
+  }
+}
+
+/* ---------- Sync met Instagram ---------- */
+const sync = { running: false, stop: false };
+const pause = (ms) => new Promise(r => setTimeout(r, ms));
+const politePause = () => pause(1400 + Math.random() * 1600);
+function typeFromMedia(m, fallback) {
+  if (m.product === 'clips') return 'reel';
+  if (m.product === 'igtv') return 'tv';
+  return fallback || 'p';
+}
+function fmtDur(sec) {
+  const s = Math.round(sec || 0);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+function applyMeta(p, m) {
+  let changed = false;
+  const set = (k, v) => { if (v && p[k] !== v) { p[k] = v; changed = true; } };
+  set('w', m.w); set('h', m.h); set('dur', Math.round((m.dur || 0) * 10) / 10); set('mt', m.mt); set('takenAt', m.takenAt);
+  if (!p.owner) set('owner', m.owner);
+  if (!p.caption) set('caption', m.caption);
+  if (m.product) set('type', typeFromMedia(m, p.type));
+  if (p.gone) { p.gone = false; changed = true; }
+  return changed;
+}
+function updateSyncUi() {
+  const b = $('#btnSync');
+  if (b) { b.hidden = !ext.ready || !state.db; b.textContent = sync.running ? 'stop sync' : 'sync instagram'; }
+  const s = $('#xStatus');
+  if (s) {
+    s.textContent = ext.ready
+      ? `Extensie ${ext.version} is actief in deze browser.${state.db && state.db.syncedAt ? ' Laatste sync: ' + fmtDate(state.db.syncedAt, true) + '.' : ' Nog niet gesynchroniseerd.'}`
+      : 'De extensie is niet gevonden in deze browser.';
+  }
+}
+function maybeAutoSync() {
+  if (state.db && ext.ready && ghOk() && state.db.syncedAt && Date.now() - state.db.syncedAt > 6 * 3600e3) runSync();
+}
+async function walkFeed(fetchPage, onItems, label, incremental) {
+  let next = null, page = 0;
+  do {
+    if (sync.stop) return;
+    setStatus(`${label}, pagina ${++page}`);
+    const r = await fetchPage(next);
+    const fresh = onItems(r.items || []);
+    next = r.next;
+    if (incremental && fresh === 0) break;
+    if (next) await politePause();
+  } while (next);
+}
+
+async function runSync() {
+  if (sync.running) { sync.stop = true; setStatus('sync stopt na deze stap…'); return; }
+  if (!ext.ready) return toast('Installeer eerst de inspo-extensie in Chrome.');
+  if (!ghOk()) return toast('Koppel eerst GitHub in instellingen. Daar worden de thumbnails bewaard.');
+  sync.running = true; sync.stop = false; updateSyncUi();
+  const db = state.db;
+  const incremental = !!db.syncedAt;
+  const meta = new Map();
+  const start = Date.now();
+  let order = 0, added = 0, batch = [];
+
+  const ensure = (m) => {
+    if (!db.posts[m.code]) {
+      addPost(db, { code: m.code, type: typeFromMedia(m, 'p'), owner: m.owner, caption: m.caption, savedAt: start - (order++) * 1000 });
+      added++;
+      return true;
+    }
+    return false;
+  };
+  const flush = async () => {
+    if (!batch.length) return;
+    const files = batch; batch = [];
+    await ghLocked(async () => {
+      const remote = await ghGet();
+      if (remote) mergeInto(state.db, await decryptDb(remote, state.password));
+      state.db.updatedAt = Date.now();
+      const blob = await encryptDb(state.db, state.password);
+      const all = [...files, { path: DATA_FILE, b64: b64(te.encode(blob)) }];
+      await ghCommitFiles(all, `Sync: ${files.length} thumbnails`);
+      state.sha = all[all.length - 1].sha;
+      store.set('cache', blob);
+    });
+    clearTimeout(saveTimer); saveTimer = null;
+    refreshThumbs();
+  };
+
+  try {
+    // 1. Alle opgeslagen posts (nieuwste eerst)
+    await walkFeed((maxId) => extCall('savedPage', { maxId }), (items) => {
+      let fresh = 0;
+      for (const m of items) { meta.set(m.code, m); if (ensure(m)) fresh++; applyMeta(db.posts[m.code], m); }
+      return fresh;
+    }, 'opgeslagen ophalen', incremental);
+
+    // 2. Collecties
+    if (!sync.stop) {
+      const { collections } = await extCall('collections');
+      for (const c of collections) {
+        if (sync.stop) break;
+        if (!db.collections.includes(c.name)) db.collections.push(c.name);
+        await politePause();
+        await walkFeed((maxId) => extCall('collectionPage', { id: c.id, maxId }), (items) => {
+          let fresh = 0;
+          for (const m of items) {
+            meta.set(m.code, m); ensure(m);
+            const p = db.posts[m.code];
+            if (!p.collections.includes(c.name)) { p.collections.push(c.name); fresh++; }
+            applyMeta(p, m);
+          }
+          return fresh;
+        }, `collectie ${c.name}`, incremental);
+      }
+    }
+    const y = scrollY; render(); scrollTo(0, y);
+
+    // 3. Thumbnails
+    const todo = Object.values(db.posts).filter(p => !p.thumb && !p.gone && !p.hidden);
+    let n = 0;
+    for (const p of todo) {
+      if (sync.stop) break;
+      setStatus(`thumbnails ${++n} van ${todo.length}`);
+      let m = meta.get(p.code);
+      try {
+        if (!m || !m.thumb) {
+          await politePause();
+          m = (await extCall('media', { code: p.code })).media;
+          meta.set(p.code, m); applyMeta(p, m);
+        }
+        if (!m.thumb) continue;
+        const { b64: data, mime } = await extCall('bytes', { url: m.thumb });
+        const jpg = await toJpeg(unb64(data), mime, 420);
+        const name = await thumbName(p.code);
+        thumbMem.set(name, URL.createObjectURL(new Blob([jpg], { type: 'image/jpeg' })));
+        batch.push({ path: `thumbs/${name}.bin`, b64: b64(await encThumb(jpg)) });
+        p.thumb = name;
+        await pause(100);
+      } catch (e) {
+        if (e.code === 'gone') { p.gone = true; continue; }
+        if (e.code === 'http' && /Download/.test(e.message)) continue;   // verlopen CDN-link: volgende keer opnieuw
+        throw e;
+      }
+      if (batch.length >= 40) await flush();
+    }
+    await flush();
+    if (!sync.stop) db.syncedAt = Date.now();
+    markDirty();
+    toast(sync.stop ? 'Sync gestopt. De rest volgt bij de volgende sync.' : `Sync klaar${added ? `, ${added} nieuwe posts` : ''}.`);
+  } catch (e) {
+    try { await flush(); } catch {}
+    markDirty();
+    setStatus('sync gestopt: ' + e.message, 'err');
+    toast(e.message);
+  } finally {
+    sync.running = false; sync.stop = false;
+    updateSyncUi();
+    const y = scrollY; render(); scrollTo(0, y);
+  }
+}
+
+/* ---------- Eigen speler ----------
+ * Met de extensie spelen we de video zelf af, met een tijdlijn. Zonder extensie: de Instagram-embed. */
+let stageToken = 0, player = null;
+const mediaCache = new Map();
+async function getMedia(code) {
+  const c = mediaCache.get(code);
+  if (c && Date.now() - c.at < 20 * 60e3) return c.media;
+  const { media } = await extCall('media', { code });
+  mediaCache.set(code, { media, at: Date.now() });
+  return media;
+}
+function setupStage(p) {
+  const crop = $('#sCrop');
+  destroyPlayer(); unmountEmbed(crop);
+  crop.dataset.code = p.code;
+  crop.className = 'crop big';
+  crop.style.setProperty('--r', p.w && p.h ? p.w / p.h : (p.type === 'p' ? 0.8 : 9 / 16));
+  crop.innerHTML = `<span class="ph">${esc(p.owner ? '@' + p.owner : p.code)}</span>`;
+  $('#sKeys').hidden = true;
+  if (p.thumb) {
+    const img = document.createElement('img');
+    img.className = 'poster'; img.alt = '';
+    crop.append(img);
+    thumbUrl(p.thumb).then(u => { img.src = u; img.classList.add('in'); }).catch(() => img.remove());
+  }
+  const token = ++stageToken;
+  if (!ext.ready) { mountEmbed(crop, p, true); return; }
+  crop.classList.add('loading');
+  getMedia(p.code).then((m) => {
+    if (token !== stageToken) return;
+    if (applyMeta(p, m)) markDirty();
+    mountPlayer(crop, p, m, 0);
+  }).catch((e) => {
+    if (token !== stageToken) return;
+    crop.classList.remove('loading');
+    crop.querySelector('.poster')?.remove();
+    if (e.code === 'gone') { markGone(crop, p); return; }
+    mountEmbed(crop, p, true);
+    if (e.code === 'login' || e.code === 'rate') toast(e.message);
+  });
+}
+
+function mountPlayer(crop, p, m, idx) {
+  destroyPlayer();
+  const it = m.items[idx] || m.items[0];
+  crop.classList.remove('loading');
+  if (it.w && it.h) crop.style.setProperty('--r', it.w / it.h);
+  const wrap = document.createElement('div');
+  wrap.className = 'vp';
+  if (it.video) {
+    wrap.innerHTML = `<video playsinline loop preload="auto"></video>
+      <div class="vp-ui">
+        <div class="vp-row">
+          <button class="vp-b" data-act="play"></button>
+          <span class="vp-t vp-cur">0:00</span>
+          <span class="vp-gap"></span>
+          <button class="vp-b" data-act="rate" title="Snelheid">1×</button>
+          <button class="vp-b" data-act="mute"></button>
+          <span class="vp-t vp-left"></span>
+        </div>
+        <div class="vp-bar" aria-label="Tijdlijn"><i class="vp-track"></i><i class="vp-buf"></i><i class="vp-fill"></i><span class="vp-tip"></span></div>
+      </div>`;
+  } else {
+    wrap.innerHTML = `<img class="full" alt="">`;
+  }
+  if (m.items.length > 1) {
+    wrap.insertAdjacentHTML('beforeend', `<div class="vp-dots">${m.items.map((_, k) =>
+      `<button data-k="${k}" class="${k === idx ? 'on' : ''}" aria-label="Onderdeel ${k + 1} van ${m.items.length}"></button>`).join('')}</div>`);
+  }
+  crop.append(wrap);
+  wrap.querySelector('.vp-dots')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-k]');
+    if (b) { e.stopPropagation(); mountPlayer(crop, p, m, +b.dataset.k); }
+  });
+
+  if (!it.video) {
+    const img = wrap.querySelector('img');
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('load', () => crop.querySelector('.poster')?.remove(), { once: true });
+    img.src = it.image || it.thumb;
+    player = { wrap };
+    $('#sKeys').hidden = true;
+    return;
+  }
+
+  const v = wrap.querySelector('video');
+  player = { wrap, v };
+  $('#sKeys').hidden = false;
+  const ui = {
+    cur: $('.vp-cur', wrap), left: $('.vp-left', wrap), fill: $('.vp-fill', wrap), buf: $('.vp-buf', wrap),
+    bar: $('.vp-bar', wrap), tip: $('.vp-tip', wrap),
+    play: $('[data-act=play]', wrap), mute: $('[data-act=mute]', wrap), rate: $('[data-act=rate]', wrap),
+  };
+  const fmt = (t) => { t = Math.max(0, t || 0); return `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`; };
+  const dur = () => (isFinite(v.duration) && v.duration) || it.dur || 0;
+  const paint = () => {
+    const d = dur();
+    ui.cur.textContent = fmt(v.currentTime);
+    ui.left.textContent = '−' + fmt(d - v.currentTime);
+    ui.fill.style.transform = `scaleX(${d ? Math.min(1, v.currentTime / d) : 0})`;
+    if (v.buffered.length && d) ui.buf.style.transform = `scaleX(${Math.min(1, v.buffered.end(v.buffered.length - 1) / d)})`;
+  };
+  const syncUi = () => {
+    ui.play.textContent = v.paused ? 'speel' : 'pauze';
+    ui.mute.textContent = v.muted ? 'geluid aan' : 'geluid uit';
+    wrap.classList.toggle('paused', v.paused);
+  };
+  let raf = 0;
+  const loop = () => { paint(); raf = requestAnimationFrame(loop); };
+  player.stop = () => cancelAnimationFrame(raf);
+  v.addEventListener('play', () => { syncUi(); cancelAnimationFrame(raf); loop(); });
+  v.addEventListener('pause', () => { syncUi(); cancelAnimationFrame(raf); paint(); });
+  v.addEventListener('volumechange', syncUi);
+  for (const ev of ['loadedmetadata', 'progress', 'seeked']) v.addEventListener(ev, paint);
+  v.addEventListener('playing', () => crop.querySelector('.poster')?.remove(), { once: true });
+  v.addEventListener('error', () => {
+    if (!player || player.v !== v) return;
+    destroyPlayer();
+    mountEmbed(crop, p, true);
+    toast('De video laden lukte niet. Je ziet nu de Instagram-embed.');
+  }, { once: true });
+
+  v.addEventListener('click', togglePlay);
+  wrap.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'play') togglePlay();
+    else if (act === 'mute') { v.muted = !v.muted; store.set('muted', v.muted); }
+    else if (act === 'rate') {
+      const rates = [1, 0.5, 0.25, 2];
+      v.playbackRate = rates[(rates.indexOf(v.playbackRate) + 1) % rates.length];
+      ui.rate.textContent = v.playbackRate + '×';
+    }
+  });
+
+  const frac = (x) => { const r = ui.bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (x - r.left) / r.width)); };
+  const seek = (x) => { const d = dur(); if (d) { v.currentTime = frac(x) * d; paint(); } };
+  ui.bar.addEventListener('pointerdown', (e) => { ui.bar.setPointerCapture(e.pointerId); wrap.classList.add('scrub'); seek(e.clientX); });
+  ui.bar.addEventListener('pointermove', (e) => {
+    const f = frac(e.clientX);
+    ui.tip.textContent = fmt(f * dur());
+    ui.tip.style.left = (f * 100) + '%';
+    if (ui.bar.hasPointerCapture(e.pointerId)) seek(e.clientX);
+  });
+  const endScrub = (e) => { if (ui.bar.hasPointerCapture(e.pointerId)) ui.bar.releasePointerCapture(e.pointerId); wrap.classList.remove('scrub'); };
+  ui.bar.addEventListener('pointerup', endScrub);
+  ui.bar.addEventListener('pointercancel', endScrub);
+
+  let idle = 0;
+  const wake = () => {
+    wrap.classList.remove('idle');
+    clearTimeout(idle);
+    idle = setTimeout(() => { if (!v.paused && !wrap.classList.contains('scrub')) wrap.classList.add('idle'); }, 1800);
+  };
+  player.wake = wake;
+  wrap.addEventListener('pointermove', wake);
+  wake();
+
+  v.muted = store.get('muted', false);
+  v.src = it.video;
+  syncUi();
+  v.play().catch(() => { v.muted = true; v.play().catch(syncUi); });
+}
+function togglePlay() {
+  const v = player && player.v;
+  if (!v) return;
+  if (v.paused) v.play().catch(() => {}); else v.pause();
+}
+function destroyPlayer() {
+  if (!player) return;
+  if (player.v) {
+    player.stop?.();
+    player.v.pause();
+    player.v.removeAttribute('src');
+    player.v.load();
+  }
+  player.wrap.remove();
+  player = null;
+}
+function playerKey(e) {
+  const v = player && player.v;
+  if (!v) return false;
+  const k = e.key.toLowerCase();
+  if (k === ' ' || k === 'k') togglePlay();
+  else if (k === 'j') v.currentTime = Math.max(0, v.currentTime - 5);
+  else if (k === 'l') v.currentTime = Math.min(v.duration || 0, v.currentTime + 5);
+  else if (k === ',') { v.pause(); v.currentTime = Math.max(0, v.currentTime - 1 / 30); }
+  else if (k === '.') { v.pause(); v.currentTime = v.currentTime + 1 / 30; }
+  else if (k === 'm') { v.muted = !v.muted; store.set('muted', v.muted); }
+  else return false;
+  e.preventDefault();
+  player.wake?.();
   return true;
 }
 
@@ -440,10 +955,16 @@ function allTags() { const s = new Set(); for (const p of Object.values(state.db
 function tileHtml(p, i) {
   const who = p.owner ? '@' + p.owner : p.code;
   return `<button class="tile" data-i="${i}" aria-label="${esc(who)}">
-    <div class="crop"><span class="ph">${esc(who)}</span></div>
+    ${cropHtml(p)}
     ${p.note ? '<i class="mark-note" title="heeft notitie"></i>' : ''}
     <figcaption><b>${esc(who)}</b><span>${esc(firstLine(p.caption) || p.tags.map(t => '#' + t).join(' '))}</span></figcaption>
   </button>`;
+}
+function cropHtml(p) {
+  const who = esc(p.owner ? '@' + p.owner : p.code);
+  if (p.gone) return `<div class="crop gone"><span class="ph">${who}<br>niet meer beschikbaar</span></div>`;
+  if (p.thumb) return `<div class="crop thumb"><img alt="" data-thumb="${esc(p.thumb)}"><span class="ph">${who}</span></div>`;
+  return `<div class="crop"><span class="ph">${who}</span></div>`;
 }
 function rowHtml(p, i) {
   const cap = firstLine(p.caption);
@@ -559,6 +1080,7 @@ function render() {
   $('#modeIndex').setAttribute('aria-selected', state.mode === 'index');
 
   embedIO.disconnect();
+  thumbIO.disconnect();
   for (const rec of frames.values()) if (!rec.crop.classList.contains('big')) frames.delete(rec.iframe.contentWindow);
   const wall = $('#wall'), index = $('#index');
   wall.hidden = state.mode !== 'wall';
@@ -566,7 +1088,7 @@ function render() {
   if (state.mode === 'wall') {
     wall.innerHTML = state.list.map(tileHtml).join('');
     index.innerHTML = '';
-    $$('.crop', wall).forEach(c => embedIO.observe(c));
+    $$('.crop', wall).forEach(c => { if (c.classList.contains('thumb')) thumbIO.observe(c); else if (!c.classList.contains('gone')) embedIO.observe(c); });
   } else {
     index.innerHTML = state.list.map(rowHtml).join('');
     wall.innerHTML = '';
@@ -596,9 +1118,9 @@ function showPeek(i, x, y) {
     peekCode = p.code;
     const crop = $('.crop', peek);
     unmountEmbed(crop);
-    crop.className = 'crop';
-    crop.innerHTML = '<span class="ph"></span>';
-    mountEmbed(crop, p);
+    crop.outerHTML = cropHtml(p);
+    const fresh = $('.crop', peek);
+    if (p.thumb) showThumb(fresh, p); else if (!p.gone) mountEmbed(fresh, p);
   }, 120);
 }
 function placePeek(x, y) {
@@ -621,17 +1143,10 @@ function openPost(i) {
   scr.hidden = false;
   document.body.style.overflow = 'hidden';
   const crop = $('#sCrop');
-  if (crop.dataset.code !== p.code) {
-    crop.dataset.code = p.code;
-    unmountEmbed(crop);
-    crop.className = 'crop big';
-    crop.style.removeProperty('--r');
-    crop.innerHTML = `<span class="ph">${esc(p.owner ? '@' + p.owner : p.code)}</span>`;
-    mountEmbed(crop, p, true);
-  }
+  if (crop.dataset.code !== p.code) setupStage(p);
   $('#sOwner').textContent = p.owner ? '@' + p.owner : p.code;
   $('#sOwner').href = p.owner ? `https://www.instagram.com/${encodeURIComponent(p.owner)}/` : postUrl(p);
-  $('#sMeta').textContent = `${typeLabel[p.type] || 'post'}${p.savedAt ? ', opgeslagen ' + fmtDate(p.savedAt, true) : ''}`;
+  $('#sMeta').textContent = `${typeLabel[p.type] || 'post'}${p.dur ? ', ' + fmtDur(p.dur) : ''}${p.savedAt ? ', opgeslagen ' + fmtDate(p.savedAt, true) : ''}`;
   $('#sColls').innerHTML = p.collections.map(c => `<button class="text" data-view="${esc(c)}">${esc(c)}</button>`).join('');
   $('#sCaption').textContent = p.caption || '';
   $('#sNote').value = p.note || '';
@@ -649,6 +1164,7 @@ function closeScreen(rerender = true) {
   const i = state.openIdx;
   $('#screen').hidden = true;
   document.body.style.overflow = '';
+  stageToken++; destroyPlayer();
   const crop = $('#sCrop'); unmountEmbed(crop); crop.innerHTML = ''; crop.dataset.code = '';
   state.openIdx = -1;
   if (rerender) {
@@ -679,6 +1195,7 @@ function openSettings() {
     const all = Object.values(state.db.posts);
     $('#dStats').textContent = `${all.length} posts, ${state.db.collections.length} collecties, ${all.filter(p => p.hidden).length} verborgen.`;
   }
+  updateSyncUi();
   $('#settings').showModal();
 }
 function readGhForm() {
@@ -768,6 +1285,7 @@ function bind() {
     const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
     if (!$('#screen').hidden) {
       if (e.key === 'Escape') { e.preventDefault(); if (typing) document.activeElement.blur(); else closeScreen(); }
+      else if (!typing && !e.metaKey && !e.ctrlKey && playerKey(e)) { /* afgehandeld door de speler */ }
       else if (!typing && e.key === 'ArrowLeft' && state.openIdx > 0) openPost(state.openIdx - 1);
       else if (!typing && e.key === 'ArrowRight' && state.openIdx < state.list.length - 1) openPost(state.openIdx + 1);
       return;
@@ -790,6 +1308,11 @@ function bind() {
     await importFiles(e.dataTransfer.files);
   });
 
+  // Sync
+  $('#btnSync').addEventListener('click', runSync);
+  $('#xSync').addEventListener('click', () => { $('#settings').close(); runSync(); });
+  $('#xFull').addEventListener('click', () => { if (sync.running) return; delete state.db.syncedAt; $('#settings').close(); runSync(); });
+
   // Instellingen
   $('#btnSettings').addEventListener('click', openSettings);
   $('#gTest').addEventListener('click', async () => {
@@ -806,7 +1329,7 @@ function bind() {
     if (state.db) {
       try {
         const remote = await ghGet();
-        if (remote) state.db = mergeDb(state.db, await decryptDb(remote, state.password));
+        if (remote) mergeInto(state.db, await decryptDb(remote, state.password));
         render(); save();
       } catch (e) { ghMsg('Bewaard, maar ophalen lukte niet: ' + e.message, 'err'); }
     } else {
@@ -841,6 +1364,7 @@ function bind() {
 /* ---------- Start ---------- */
 (async function init() {
   bind();
+  window.postMessage({ __inspo: 'req', cmd: 'hello' }, location.origin);
   if (!gh()) store.set('gh', { ...DEFAULT_GH });
   const err = await loadBlob();
   showLock(err ? 'Kon de data niet ophalen: ' + err.message + '. De lokale kopie wordt gebruikt als die er is.' : '');
