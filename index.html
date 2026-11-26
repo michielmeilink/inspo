@@ -4,135 +4,167 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>Inspiratie</title>
+  <meta name="theme-color" content="#000000">
+  <title>inspo</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="locked">
 
   <!-- Vergrendelscherm -->
   <section id="lock" class="lock">
-    <form id="lockForm" class="lock-card" autocomplete="off">
-      <h1>Inspiratie</h1>
-      <p id="lockIntro" class="muted">Voer je wachtwoord in.</p>
-      <input id="pw" type="password" placeholder="Wachtwoord" autocomplete="current-password" required>
-      <input id="pw2" type="password" placeholder="Herhaal wachtwoord" hidden>
-      <label class="check"><input id="remember" type="checkbox" checked> Onthoud op dit apparaat</label>
-      <button type="submit" class="primary" id="lockBtn">Ontgrendel</button>
+    <form id="lockForm" class="lock-form" autocomplete="off">
+      <h1 class="mark">inspo</h1>
+      <p id="lockIntro" class="dim">Voer je wachtwoord in.</p>
+      <input id="pw" class="line" type="password" placeholder="wachtwoord" autocomplete="current-password" required>
+      <input id="pw2" class="line" type="password" placeholder="herhaal wachtwoord" hidden>
+      <label class="check"><input id="remember" type="checkbox" checked> onthoud op dit apparaat</label>
+      <div class="lock-actions">
+        <button type="submit" class="solid" id="lockBtn">Ontgrendel</button>
+        <button type="button" class="text" id="lockSettings">GitHub-koppeling</button>
+      </div>
       <p id="lockMsg" class="msg"></p>
-      <button type="button" class="link" id="lockSettings">GitHub-koppeling instellen</button>
     </form>
   </section>
 
   <!-- App -->
-  <div id="app" hidden>
-    <header class="top">
-      <div class="brand">Inspiratie</div>
-      <div class="search">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input id="q" type="search" placeholder="Zoek op account, tag, notitie…" autocomplete="off">
+  <div id="app" class="app" hidden>
+    <aside class="rail">
+      <div class="mark" aria-label="inspo">inspo</div>
+
+      <label class="find">
+        <span class="sr">Zoeken</span>
+        <input id="q" type="search" placeholder="zoek" autocomplete="off" spellcheck="false">
         <kbd>/</kbd>
+      </label>
+
+      <nav id="colls" class="list" aria-label="Collecties"></nav>
+
+      <div class="tags-wrap">
+        <h2 class="rail-h">tags</h2>
+        <nav id="tags" class="list small" aria-label="Tags"></nav>
       </div>
-      <select id="sort" title="Sorteren">
-        <option value="new">Nieuwst opgeslagen</option>
-        <option value="old">Oudst opgeslagen</option>
-        <option value="owner">Account A–Z</option>
-        <option value="edited">Laatst bewerkt</option>
-      </select>
-      <input id="size" type="range" min="140" max="360" step="10" title="Grootte">
-      <span id="status" class="status"></span>
-      <button id="btnImport" class="ghost">Importeer</button>
-      <button id="btnSettings" class="icon" title="Instellingen">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-      </button>
-    </header>
-    <nav id="tabs" class="tabs"></nav>
-    <div id="tagbar" class="tagbar"></div>
-    <main id="grid" class="grid"></main>
-    <div id="empty" class="empty" hidden></div>
+
+      <div class="rail-foot">
+        <span id="status" class="status"></span>
+        <div class="rail-actions">
+          <button id="btnImport" class="text">importeer</button>
+          <button id="btnSettings" class="text">instellingen</button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <div class="bar">
+        <div class="bar-title"><span id="viewTitle"></span><sup id="viewCount"></sup></div>
+        <div class="bar-ctrl">
+          <div class="seg" role="tablist" aria-label="Weergave">
+            <button id="modeWall" class="text" role="tab">wall</button>
+            <button id="modeIndex" class="text" role="tab">index</button>
+          </div>
+          <select id="sort" class="text-select" aria-label="Sorteren">
+            <option value="new">nieuwste eerst</option>
+            <option value="old">oudste eerst</option>
+            <option value="owner">op account</option>
+            <option value="edited">laatst bewerkt</option>
+          </select>
+          <label class="zoom" title="Kolommen"><span class="sr">Kolommen</span><input id="cols" type="range" min="3" max="10" step="1"></label>
+        </div>
+      </div>
+
+      <div id="wall" class="wall"></div>
+      <ol id="index" class="index" hidden></ol>
+      <div id="empty" class="empty" hidden></div>
+    </main>
   </div>
 
-  <!-- Speler -->
-  <div id="modal" class="modal" hidden>
-    <div class="mbox">
-      <div class="player"><iframe id="frame" title="Instagram-post" allow="autoplay; encrypted-media; clipboard-write; fullscreen" allowfullscreen></iframe></div>
-      <aside class="side">
-        <div class="mhead">
-          <a id="mOwner" target="_blank" rel="noopener"></a>
-          <button id="mClose" class="icon" title="Sluiten (Esc)">✕</button>
-        </div>
-        <div id="mDate" class="muted small"></div>
-        <div id="mColls" class="chips"></div>
-        <p id="mCaption" class="caption"></p>
-        <label for="mTagIn">Tags</label>
-        <div id="mTags" class="chips"></div>
-        <input id="mTagIn" list="tagList" placeholder="Tag toevoegen, Enter" autocomplete="off">
+  <!-- Preview bij hover in index -->
+  <div id="peek" class="peek" hidden><div class="crop"></div></div>
+
+  <!-- Screening -->
+  <div id="screen" class="screen" hidden role="dialog" aria-modal="true" aria-label="Post bekijken">
+    <button id="sPrev" class="nav prev" aria-label="Vorige">‹</button>
+    <div class="screen-frame"><div class="crop big" id="sCrop"></div></div>
+    <aside class="screen-info">
+      <div class="screen-top">
+        <span id="sPos" class="dim small"></span>
+        <button id="sClose" class="text">sluit <kbd>esc</kbd></button>
+      </div>
+      <a id="sOwner" class="owner" target="_blank" rel="noopener"></a>
+      <div id="sMeta" class="dim small"></div>
+      <div id="sColls" class="small"></div>
+      <p id="sCaption" class="caption"></p>
+
+      <div class="field">
+        <label for="sTagIn" class="dim small">tags</label>
+        <div id="sTags" class="taglist"></div>
+        <input id="sTagIn" class="line" list="tagList" placeholder="nieuwe tag, enter" autocomplete="off">
         <datalist id="tagList"></datalist>
-        <label for="mNote">Notitie</label>
-        <textarea id="mNote" rows="5" placeholder="Wat vind je hier goed aan? Timing, transitie, type…"></textarea>
-        <div class="mact">
-          <a id="mOpen" class="btn" target="_blank" rel="noopener">Open op Instagram ↗</a>
-          <button id="mCopy" class="ghost">Kopieer link</button>
-          <button id="mHide" class="ghost danger">Verberg</button>
-        </div>
-        <div class="mnav">
-          <button id="mPrev" class="ghost" title="Vorige (←)">←</button>
-          <span id="mPos" class="muted small"></span>
-          <button id="mNext" class="ghost" title="Volgende (→)">→</button>
-        </div>
-      </aside>
-    </div>
+      </div>
+      <div class="field">
+        <label for="sNote" class="dim small">notitie</label>
+        <textarea id="sNote" class="line" rows="4" placeholder="wat neem je hieruit mee?"></textarea>
+      </div>
+
+      <div class="screen-actions">
+        <a id="sOpen" class="text" target="_blank" rel="noopener">open in instagram</a>
+        <button id="sCopy" class="text">kopieer link</button>
+        <button id="sHide" class="text warn">verberg</button>
+      </div>
+    </aside>
+    <button id="sNext" class="nav next" aria-label="Volgende">›</button>
   </div>
 
   <!-- Instellingen -->
   <dialog id="settings">
     <form method="dialog" class="settings">
-      <h2>Instellingen</h2>
+      <div class="settings-head">
+        <h2>Instellingen</h2>
+        <button class="text" value="close">sluit</button>
+      </div>
 
-      <fieldset>
-        <legend>GitHub-opslag</legend>
-        <p class="muted small">De versleutelde data staat als <code>data.enc</code> in je repo. Het token blijft in deze browser.</p>
-        <div class="row">
-          <label>Eigenaar<input id="sOwner" placeholder="michielmeilink"></label>
-          <label>Repo<input id="sRepo" placeholder="inspo"></label>
-          <label>Branch<input id="sBranch" placeholder="main"></label>
+      <section>
+        <h3>GitHub-opslag</h3>
+        <p class="dim small">De versleutelde data staat als <code>data.enc</code> in je repo. Het token blijft in deze browser.</p>
+        <div class="grid3">
+          <label>eigenaar<input id="gOwner" class="line" placeholder="michielmeilink"></label>
+          <label>repo<input id="gRepo" class="line" placeholder="inspo"></label>
+          <label>branch<input id="gBranch" class="line" placeholder="main"></label>
         </div>
-        <label>Fine-grained token (Contents: read &amp; write)<input id="sToken" type="password" placeholder="github_pat_…" autocomplete="off"></label>
+        <label>token (Contents: read and write)<input id="gToken" class="line" type="password" placeholder="github_pat_…" autocomplete="off"></label>
         <div class="row">
-          <button type="button" id="sTest" class="ghost">Test koppeling</button>
-          <button type="button" id="sSaveGh" class="primary">Opslaan</button>
+          <button type="button" id="gTest" class="text">test koppeling</button>
+          <button type="button" id="gSave" class="solid">Bewaar koppeling</button>
         </div>
-        <p id="sGhMsg" class="msg"></p>
-      </fieldset>
+        <p id="gMsg" class="msg"></p>
+      </section>
 
-      <fieldset class="needs-unlock">
-        <legend>Data</legend>
+      <section class="needs-unlock">
+        <h3>Data</h3>
         <div class="row">
-          <button type="button" id="sImport" class="ghost">Importeer export (.zip / .json)</button>
-          <button type="button" id="sBackup" class="ghost">Download back-up (JSON)</button>
-          <button type="button" id="sUnhide" class="ghost">Verborgen posts terugzetten</button>
+          <button type="button" id="dImport" class="text">importeer export</button>
+          <button type="button" id="dBackup" class="text">download back-up</button>
+          <button type="button" id="dUnhide" class="text">verborgen posts terugzetten</button>
         </div>
-        <p id="sStats" class="muted small"></p>
-      </fieldset>
+        <p id="dStats" class="dim small"></p>
+      </section>
 
-      <fieldset class="needs-unlock">
-        <legend>Wachtwoord</legend>
+      <section class="needs-unlock">
+        <h3>Wachtwoord</h3>
         <div class="row">
-          <input id="sNewPw" type="password" placeholder="Nieuw wachtwoord" autocomplete="new-password">
-          <button type="button" id="sChangePw" class="ghost">Wijzig</button>
-          <button type="button" id="sLock" class="ghost danger">Vergrendel en vergeet</button>
+          <input id="pNew" class="line" type="password" placeholder="nieuw wachtwoord" autocomplete="new-password">
+          <button type="button" id="pChange" class="text">wijzig</button>
+          <button type="button" id="pLock" class="text warn">vergrendel en vergeet</button>
         </div>
-        <p id="sPwMsg" class="msg"></p>
-      </fieldset>
-
-      <div class="row end"><button class="primary" value="close">Sluiten</button></div>
+        <p id="pMsg" class="msg"></p>
+      </section>
     </form>
   </dialog>
 
-  <div id="drop" class="drop" hidden><div>Laat los om te importeren</div></div>
-  <div id="toast" class="toast" hidden></div>
+  <div id="drop" class="drop" hidden><span>laat los om te importeren</span></div>
+  <div id="toast" class="toast" role="status" hidden></div>
   <input id="file" type="file" multiple accept=".zip,.json,application/zip,application/json" hidden>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>

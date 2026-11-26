@@ -1,4 +1,4 @@
-/* Inspiratie — dashboard voor opgeslagen Instagram-posts.
+/* inspo — dashboard voor opgeslagen Instagram-posts.
  * Data staat versleuteld (AES-256-GCM, sleutel via PBKDF2 uit je wachtwoord) in data.enc.
  * Opslaan gaat via de GitHub Contents API met een fine-grained token dat alleen in deze browser staat.
  */
@@ -18,7 +18,7 @@ const store = {
 
 const state = {
   db: null, password: null, blob: null, sha: null,
-  view: store.get('view', 'all'), q: '', tag: null, sort: store.get('sort', 'new'),
+  view: store.get('view', 'all'), q: '', tag: null, sort: store.get('sort', 'new'), mode: store.get('mode', 'wall'),
   list: [], openIdx: -1, saving: false, again: false,
 };
 
@@ -116,7 +116,7 @@ function addPost(db, it) {
   if (it.type && (p.type === 'p' || !p.type) && it.type !== 'p') p.type = it.type;
   if (it.owner && !p.owner) p.owner = it.owner;
   if (it.savedAt && (!p.savedAt || it.savedAt > p.savedAt)) p.savedAt = it.savedAt;
-  if (it.caption && !p.caption) p.caption = it.caption;
+  if (it.caption && it.caption !== p.caption) p.caption = it.caption;
   if (it.thumb) p.thumb = it.thumb;
   if (it.collection) {
     if (!p.collections.includes(it.collection)) p.collections.push(it.collection);
@@ -191,6 +191,14 @@ function ownerOf(entry) {
   }
   return '';
 }
+function captionOf(entry) {
+  let found = '';
+  walk(entry, (o) => {
+    if (found) return;
+    if (typeof o.label === 'string' && /^(caption|onderschrift|bijschrift)$/i.test(o.label) && typeof o.value === 'string') found = o.value;
+  });
+  return fixText(found).trim();
+}
 function collectionName(entry) {
   let found = '';
   walk(entry, (o, path) => {
@@ -231,7 +239,7 @@ function parseExport(files) {
           continue;
         }
         for (const p of posts) {
-          items.push({ ...p, owner: ownerOf(entry), savedAt: maxTimestamp(entry), collection: isColl ? current : null });
+          items.push({ ...p, owner: ownerOf(entry), caption: captionOf(entry), savedAt: maxTimestamp(entry), collection: isColl ? current : null });
         }
       }
     }
@@ -277,14 +285,14 @@ async function importFiles(fileList) {
 /* ---------- Opslaan ---------- */
 let saveTimer = null;
 function setStatus(text, cls = '') { const el = $('#status'); el.textContent = text; el.className = 'status ' + cls; }
-function markDirty() { setStatus('Niet opgeslagen', 'warn'); clearTimeout(saveTimer); saveTimer = setTimeout(save, 1200); }
+function markDirty() { setStatus('niet opgeslagen', 'warn'); clearTimeout(saveTimer); saveTimer = setTimeout(save, 1200); }
 window.addEventListener('beforeunload', (e) => { if (saveTimer || state.saving) { e.preventDefault(); e.returnValue = ''; } });
 
 async function save() {
   saveTimer = null;
   if (state.saving) { state.again = true; return; }
   state.saving = true;
-  setStatus('Opslaan…');
+  setStatus('opslaan…');
   try {
     state.db.updatedAt = Date.now();
     let blob = await encryptDb(state.db, state.password);
@@ -301,12 +309,12 @@ async function save() {
         store.set('cache', blob);
         await ghPut(blob);
       }
-      setStatus('Opgeslagen', 'ok');
+      setStatus('opgeslagen', 'ok');
     } else {
-      setStatus('Alleen in deze browser opgeslagen', 'warn');
+      setStatus('alleen in deze browser opgeslagen', 'warn');
     }
   } catch (e) {
-    setStatus('Opslaan mislukt: ' + e.message, 'err');
+    setStatus('opslaan mislukt: ' + e.message, 'err');
   }
   state.saving = false;
   if (state.again) { state.again = false; save(); }
@@ -359,19 +367,25 @@ async function unlock(pw, remember) {
   $('#app').hidden = false;
   render();
   if (!state.blob) save();
-  else setStatus(ghOk() ? 'Gesynchroniseerd' : 'Niet gekoppeld aan GitHub', ghOk() ? 'ok' : 'warn');
+  else setStatus(ghOk() ? 'gesynchroniseerd' : 'niet gekoppeld aan GitHub', ghOk() ? 'ok' : 'warn');
   if (!Object.keys(state.db.posts).length) showEmptyHint();
   return true;
 }
 
 /* ---------- Render ---------- */
-const fmtDate = (ms) => ms ? new Date(ms).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+const MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+function fmtDate(ms, long = false) {
+  if (!ms) return '';
+  const d = new Date(ms);
+  if (long) return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  return d.getFullYear() === new Date().getFullYear() ? `${d.getDate()} ${MONTHS[d.getMonth()]}` : `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const hue = (s) => { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
-const typeLabel = { reel: 'Reel', p: 'Post', tv: 'Video' };
-const postUrl = (p) => `https://www.instagram.com/${p.type === 'reel' ? 'reel' : p.type === 'tv' ? 'tv' : 'p'}/${p.code}/`;
-const embedUrl = (p) => postUrl(p) + 'embed/captioned/';
-const thumbUrl = (p) => p.thumb || `https://www.instagram.com/p/${p.code}/media/?size=m`;
+const typeLabel = { reel: 'reel', p: 'post', tv: 'video' };
+const seg = (p) => p.type === 'reel' ? 'reel' : p.type === 'tv' ? 'tv' : 'p';
+const postUrl = (p) => `https://www.instagram.com/${seg(p)}/${p.code}/`;
+const embedUrl = (p) => postUrl(p) + 'embed/';
+const firstLine = (s) => (s || '').split('\n').map(x => x.trim()).find(Boolean) || '';
 
 function visiblePosts() { return Object.values(state.db.posts).filter(p => !p.hidden); }
 function inView(p) {
@@ -380,13 +394,13 @@ function inView(p) {
   return p.collections.includes(state.view);
 }
 function computeList() {
-  const terms = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = state.q.toLowerCase().split(/\s+/).filter(Boolean).map(t => t.replace(/^[#@]/, ''));
   let arr = visiblePosts().filter(inView);
   if (state.tag) arr = arr.filter(p => p.tags.includes(state.tag));
   if (terms.length) {
     arr = arr.filter(p => {
-      const hay = [p.owner, p.caption, p.note, p.code, p.type, ...p.tags, ...p.collections].join(' ').toLowerCase();
-      return terms.every(t => hay.includes(t.replace(/^[#@]/, '')));
+      const hay = [p.owner, p.caption, p.note, p.code, typeLabel[p.type], ...p.tags, ...p.collections].join(' ').toLowerCase();
+      return terms.every(t => hay.includes(t));
     });
   }
   const by = {
@@ -397,97 +411,250 @@ function computeList() {
   }[state.sort];
   return arr.sort(by);
 }
-
-function renderTabs() {
-  const posts = visiblePosts();
-  const tabs = [['all', 'Alle', posts.length]];
-  for (const c of state.db.collections) tabs.push([c, c, posts.filter(p => p.collections.includes(c)).length]);
-  const none = posts.filter(p => !p.collections.length).length;
-  if (none && state.db.collections.length) tabs.push(['__none', 'Zonder collectie', none]);
-  if (!tabs.some(t => t[0] === state.view)) state.view = 'all';
-  $('#tabs').innerHTML = tabs.map(([id, label, n]) =>
-    `<button class="tab${id === state.view ? ' on' : ''}" data-view="${esc(id)}">${esc(label)}<span class="n">${n}</span></button>`).join('');
+function viewName() {
+  if (state.view === 'all') return 'alles';
+  if (state.view === '__none') return 'zonder collectie';
+  return state.view;
 }
-function renderTagbar() {
+
+function renderRail() {
+  const posts = visiblePosts();
+  const rows = [['all', 'alles', posts.length]];
+  for (const c of state.db.collections) rows.push([c, c, posts.filter(p => p.collections.includes(c)).length]);
+  const none = posts.filter(p => !p.collections.length).length;
+  if (none && state.db.collections.length) rows.push(['__none', 'zonder collectie', none]);
+  if (!rows.some(r => r[0] === state.view)) state.view = 'all';
+  $('#colls').innerHTML = rows.map(([id, label, n]) =>
+    `<button class="${id === state.view ? 'on' : ''}" data-view="${esc(id)}"><span>${esc(label)}</span><span class="n">${n}</span></button>`).join('');
+
   const counts = new Map();
-  for (const p of visiblePosts().filter(inView)) for (const t of p.tags) counts.set(t, (counts.get(t) || 0) + 1);
+  for (const p of posts.filter(inView)) for (const t of p.tags) counts.set(t, (counts.get(t) || 0) + 1);
   if (state.tag && !counts.has(state.tag)) state.tag = null;
   const tags = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  $('#tagbar').innerHTML = tags.map(([t, n]) =>
-    `<button class="chip${t === state.tag ? ' on' : ''}" data-tag="${esc(t)}">#${esc(t)} <span>${n}</span></button>`).join('');
+  $('#tags').innerHTML = tags.map(([t, n]) =>
+    `<button class="${t === state.tag ? 'on' : ''}" data-tag="${esc(t)}"><span>#${esc(t)}</span><span class="n">${n}</span></button>`).join('');
   $('#tagList').innerHTML = [...allTags()].map(t => `<option value="${esc(t)}">`).join('');
 }
 function allTags() { const s = new Set(); for (const p of Object.values(state.db.posts)) p.tags.forEach(t => s.add(t)); return s; }
 
-function cardHtml(p, i) {
-  const initial = (p.owner || '?').replace(/^[^a-z0-9]+/i, '').charAt(0).toUpperCase() || '?';
-  return `<button class="card" data-i="${i}" title="${esc(p.owner ? '@' + p.owner : p.code)}">
-    <div class="thumb" style="--h:${hue(p.owner || p.code)}">
-      <div class="ph"><div><b>${esc(initial)}</b><span>${esc(p.owner ? '@' + p.owner : p.code)}</span></div></div>
-      <img loading="lazy" decoding="async" referrerpolicy="no-referrer" alt="" src="${esc(thumbUrl(p))}">
-      <span class="badge">${typeLabel[p.type] || 'Post'}</span>
-      ${p.note ? '<span class="dot" title="Heeft notitie"></span>' : ''}
-      <div class="play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
-    </div>
-    <div class="meta"><span class="owner">${esc(p.owner ? '@' + p.owner : '—')}</span><span class="date">${fmtDate(p.savedAt)}</span></div>
-    ${p.tags.length ? `<div class="ctags">${p.tags.slice(0, 4).map(t => `<span>#${esc(t)}</span>`).join('')}</div>` : ''}
+function tileHtml(p, i) {
+  const who = p.owner ? '@' + p.owner : p.code;
+  return `<button class="tile" data-i="${i}" aria-label="${esc(who)}">
+    <div class="crop"><span class="ph">${esc(who)}</span></div>
+    ${p.note ? '<i class="mark-note" title="heeft notitie"></i>' : ''}
+    <figcaption><b>${esc(who)}</b><span>${esc(firstLine(p.caption) || p.tags.map(t => '#' + t).join(' '))}</span></figcaption>
   </button>`;
 }
+function rowHtml(p, i) {
+  const cap = firstLine(p.caption);
+  return `<li tabindex="0" data-i="${i}">
+    <span class="r-owner">${esc(p.owner ? '@' + p.owner : p.code)}</span>
+    <span class="r-cap">${p.tags.length ? `<span class="r-tags">${esc(p.tags.map(t => '#' + t).join(' '))}</span> ` : ''}${esc(cap)}</span>
+    <span class="r-coll">${esc(p.collections.join(', '))}</span>
+    <span class="r-date">${fmtDate(p.savedAt)}</span>
+  </li>`;
+}
+
+/* ---------- Embeds als beeld ----------
+ * De officiële Instagram-embed wordt bijgesneden tot alleen het beeld. De embed meldt zijn hoogte
+ * via postMessage (MEASURE); daaruit leiden we de beeldverhouding af en passen de uitsnede aan.
+ * Een embed die nooit meet, is een verwijderde of afgeschermde post. */
+const HEAD = 57, FOOT = 151;
+const arCache = store.get('ar', {});
+const goneCache = new Set(store.get('gone', []));
+const frames = new Map(); // contentWindow -> { iframe, crop, p, measured }
+let arSaveTimer;
+function persistFit() {
+  clearTimeout(arSaveTimer);
+  arSaveTimer = setTimeout(() => { store.set('ar', arCache); store.set('gone', [...goneCache]); }, 800);
+}
+
+window.addEventListener('message', (e) => {
+  let host = '';
+  try { host = new URL(e.origin).hostname; } catch { return; }
+  if (!/(^|\.)instagram\.com$/.test(host)) return;
+  let d = e.data;
+  if (typeof d === 'string') { try { d = JSON.parse(d); } catch { return; } }
+  if (!d || d.type !== 'MEASURE' || !d.details) return;
+  const rec = frames.get(e.source);
+  if (!rec || rec.measured) return;
+  rec.measured = true;
+  const a = (d.details.height - HEAD - FOOT) / rec.iframe.offsetWidth;
+  if (!(a > 0.3 && a < 2.2)) return;
+  arCache[rec.p.code] = Math.round(a * 1000) / 1000;
+  goneCache.delete(rec.p.code);
+  persistFit();
+  fitEmbed(rec.crop, rec.iframe, rec.p, a);
+  rec.iframe.classList.add('in');
+});
+
+function setFit(f, w, left, dy) {
+  f.style.setProperty('--w', w + 'cqw');
+  f.style.setProperty('--l', left + 'cqw');
+  f.style.setProperty('--dy', dy + 'cqw');
+}
+function fitEmbed(crop, f, p, a) {
+  // Staande reels staan in de embed als 9:16 binnen een 4:5-vlak (zwarte balken links en rechts).
+  const letterbox = p.type !== 'p' && a > 1.18;
+  if (crop.classList.contains('big')) {
+    crop.style.setProperty('--r', letterbox ? 9 / 16 : 1 / a);
+    return letterbox ? setFit(f, 142.22, -21.11, 0) : setFit(f, 100.6, -0.3, 0);
+  }
+  if (letterbox) return setFit(f, 144, -22, 0.6);
+  const w = Math.max(100, 177.78 / a) * 1.03;      // vul de 9:16-tegel
+  setFit(f, w, -(w - 100) / 2, Math.max(0, (a * w - 177.78) / 2));
+}
+
+function unmountEmbed(crop) {
+  const f = crop.querySelector('iframe');
+  if (!f) return;
+  for (const [win, rec] of frames) if (rec.iframe === f) frames.delete(win);
+  f.remove();
+}
+function markGone(crop, p) {
+  unmountEmbed(crop);
+  crop.classList.add('gone');
+  const ph = crop.querySelector('.ph');
+  if (ph) ph.innerHTML = `${esc(p.owner ? '@' + p.owner : p.code)}<br>niet meer beschikbaar`;
+}
+
+function mountEmbed(crop, p, force = false) {
+  if (!p || crop.querySelector('iframe')) return;
+  if (!force && goneCache.has(p.code)) return markGone(crop, p);
+  const f = document.createElement('iframe');
+  f.src = embedUrl(p);
+  f.tabIndex = -1;
+  f.title = p.owner ? '@' + p.owner : p.code;
+  f.setAttribute('scrolling', 'no');
+  const rec = { iframe: f, crop, p, measured: false };
+  const cached = arCache[p.code];
+  if (cached) { rec.measured = true; fitEmbed(crop, f, p, cached); }
+  crop.append(f);
+  frames.set(f.contentWindow, rec);
+  f.addEventListener('load', () => {
+    if (cached) f.classList.add('in');
+    setTimeout(() => {
+      if (!rec.measured && f.isConnected) { goneCache.add(p.code); persistFit(); markGone(crop, p); }
+    }, 7000);
+  }, { once: true });
+}
+
+const embedIO = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    const crop = e.target;
+    if (e.isIntersecting) mountEmbed(crop, state.list[+crop.closest('[data-i]').dataset.i]);
+    else if (!crop.classList.contains('gone')) unmountEmbed(crop);
+  }
+}, { rootMargin: '900px 0px' });
 
 function render() {
   if (!state.db) return;
-  renderTabs();
-  renderTagbar();
+  renderRail();
   state.list = computeList();
-  $('#grid').innerHTML = state.list.map(cardHtml).join('');
+  $('#viewTitle').textContent = state.tag ? `${viewName()} #${state.tag}` : viewName();
+  $('#viewCount').textContent = state.list.length;
+  $('#modeWall').classList.toggle('on', state.mode === 'wall');
+  $('#modeIndex').classList.toggle('on', state.mode === 'index');
+  $('#modeWall').setAttribute('aria-selected', state.mode === 'wall');
+  $('#modeIndex').setAttribute('aria-selected', state.mode === 'index');
+
+  embedIO.disconnect();
+  for (const rec of frames.values()) if (!rec.crop.classList.contains('big')) frames.delete(rec.iframe.contentWindow);
+  const wall = $('#wall'), index = $('#index');
+  wall.hidden = state.mode !== 'wall';
+  index.hidden = state.mode !== 'index';
+  if (state.mode === 'wall') {
+    wall.innerHTML = state.list.map(tileHtml).join('');
+    index.innerHTML = '';
+    $$('.crop', wall).forEach(c => embedIO.observe(c));
+  } else {
+    index.innerHTML = state.list.map(rowHtml).join('');
+    wall.innerHTML = '';
+  }
+
   const empty = $('#empty');
   if (!state.list.length) {
     empty.hidden = false;
     empty.innerHTML = Object.keys(state.db.posts).length
-      ? '<h2>Niets gevonden</h2><p>Pas je zoekopdracht of filter aan.</p>'
-      : emptyHintHtml();
+      ? '<h2>Niets gevonden</h2><p>Probeer een andere zoekterm, of kies een andere collectie of tag.</p>'
+      : `<h2>Nog leeg</h2><p>Sleep je Instagram-export (.zip) hierheen, of kies <b>importeer</b> linksonder.
+         Vraag de export aan via Accountcentrum → Je informatie downloaden → Opgeslagen → JSON.</p>`;
   } else empty.hidden = true;
-}
-function emptyHintHtml() {
-  return `<h2>Nog geen posts</h2>
-    <p>Sleep je Instagram-export (.zip of <code>saved_posts.json</code> + <code>saved_collections.json</code>) op deze pagina,<br>of klik op <b>Importeer</b>.</p>`;
 }
 function showEmptyHint() { render(); }
 
-/* ---------- Speler ---------- */
+/* ---------- Peek (index) ---------- */
+let peekTimer = null, peekCode = null;
+function showPeek(i, x, y) {
+  const p = state.list[i]; if (!p) return;
+  const peek = $('#peek');
+  peek.hidden = false;
+  placePeek(x, y);
+  if (peekCode === p.code) return;
+  clearTimeout(peekTimer);
+  peekTimer = setTimeout(() => {
+    peekCode = p.code;
+    const crop = $('.crop', peek);
+    unmountEmbed(crop);
+    crop.className = 'crop';
+    crop.innerHTML = '<span class="ph"></span>';
+    mountEmbed(crop, p);
+  }, 120);
+}
+function placePeek(x, y) {
+  const peek = $('#peek'); const w = 190, h = w * 16 / 9;
+  let left = x + 28, top = y - h / 2;
+  if (left + w > innerWidth - 12) left = x - w - 28;
+  top = Math.max(12, Math.min(innerHeight - h - 12, top));
+  peek.style.left = left + 'px'; peek.style.top = top + 'px';
+}
+function hidePeek() { clearTimeout(peekTimer); $('#peek').hidden = true; }
+
+/* ---------- Screening ---------- */
 function openPost(i) {
   const p = state.list[i];
   if (!p) return;
+  hidePeek();
   state.openIdx = i;
-  const modal = $('#modal');
-  modal.hidden = false;
+  const scr = $('#screen');
+  const wasHidden = scr.hidden;
+  scr.hidden = false;
   document.body.style.overflow = 'hidden';
-  const frame = $('#frame');
-  if (frame.dataset.code !== p.code) { frame.src = embedUrl(p); frame.dataset.code = p.code; }
-  $('#mOwner').textContent = p.owner ? '@' + p.owner : p.code;
-  $('#mOwner').href = p.owner ? `https://www.instagram.com/${encodeURIComponent(p.owner)}/` : postUrl(p);
-  $('#mDate').textContent = [typeLabel[p.type] || 'Post', p.savedAt ? 'opgeslagen ' + fmtDate(p.savedAt) : ''].filter(Boolean).join(' · ');
-  $('#mColls').innerHTML = p.collections.map(c => `<span class="chip">${esc(c)}</span>`).join('');
-  $('#mCaption').textContent = p.caption || '';
-  $('#mNote').value = p.note || '';
-  $('#mOpen').href = postUrl(p);
-  $('#mPos').textContent = `${i + 1} / ${state.list.length}`;
-  $('#mPrev').disabled = i === 0;
-  $('#mNext').disabled = i === state.list.length - 1;
-  renderModalTags(p);
+  const crop = $('#sCrop');
+  if (crop.dataset.code !== p.code) {
+    crop.dataset.code = p.code;
+    unmountEmbed(crop);
+    crop.className = 'crop big';
+    crop.style.removeProperty('--r');
+    crop.innerHTML = `<span class="ph">${esc(p.owner ? '@' + p.owner : p.code)}</span>`;
+    mountEmbed(crop, p, true);
+  }
+  $('#sOwner').textContent = p.owner ? '@' + p.owner : p.code;
+  $('#sOwner').href = p.owner ? `https://www.instagram.com/${encodeURIComponent(p.owner)}/` : postUrl(p);
+  $('#sMeta').textContent = `${typeLabel[p.type] || 'post'}${p.savedAt ? ', opgeslagen ' + fmtDate(p.savedAt, true) : ''}`;
+  $('#sColls').innerHTML = p.collections.map(c => `<button class="text" data-view="${esc(c)}">${esc(c)}</button>`).join('');
+  $('#sCaption').textContent = p.caption || '';
+  $('#sNote').value = p.note || '';
+  $('#sOpen').href = postUrl(p);
+  $('#sPos').textContent = `${i + 1} van ${state.list.length}`;
+  $('#sPrev').disabled = i === 0;
+  $('#sNext').disabled = i === state.list.length - 1;
+  renderScreenTags(p);
+  if (wasHidden) $('#sClose').focus({ preventScroll: true });
 }
-function renderModalTags(p) {
-  $('#mTags').innerHTML = p.tags.map(t => `<span class="chip">#${esc(t)} <span class="x" data-rm="${esc(t)}">✕</span></span>`).join('');
+function renderScreenTags(p) {
+  $('#sTags').innerHTML = p.tags.map(t => `<button class="text" data-rm="${esc(t)}" title="verwijder tag">#${esc(t)}</button>`).join('');
 }
-function closeModal() {
-  $('#modal').hidden = true;
+function closeScreen(rerender = true) {
+  const i = state.openIdx;
+  $('#screen').hidden = true;
   document.body.style.overflow = '';
-  const frame = $('#frame');
-  frame.src = 'about:blank'; frame.dataset.code = '';
-  const card = $(`.card[data-i="${state.openIdx}"]`);
+  const crop = $('#sCrop'); unmountEmbed(crop); crop.innerHTML = ''; crop.dataset.code = '';
   state.openIdx = -1;
-  render();
-  if (card) $(`.card[data-i="${card.dataset.i}"]`)?.focus({ preventScroll: false });
+  if (rerender) {
+    const y = scrollY; render(); scrollTo(0, y);
+  }
+  $(`[data-i="${i}"]`)?.focus({ preventScroll: true });
 }
 function currentPost() { return state.list[state.openIdx]; }
 function editPost(fn) {
@@ -505,24 +672,29 @@ function toast(msg) {
 /* ---------- Instellingen ---------- */
 function openSettings() {
   const c = gh() || DEFAULT_GH;
-  $('#sOwner').value = c.owner || ''; $('#sRepo').value = c.repo || ''; $('#sBranch').value = c.branch || 'main';
-  $('#sToken').value = c.token || '';
-  $('#sGhMsg').textContent = ''; $('#sPwMsg').textContent = '';
+  $('#gOwner').value = c.owner || ''; $('#gRepo').value = c.repo || ''; $('#gBranch').value = c.branch || 'main';
+  $('#gToken').value = c.token || '';
+  $('#gMsg').textContent = ''; $('#pMsg').textContent = '';
   if (state.db) {
     const all = Object.values(state.db.posts);
-    $('#sStats').textContent = `${all.length} posts, ${state.db.collections.length} collecties, ${all.filter(p => p.hidden).length} verborgen.`;
+    $('#dStats').textContent = `${all.length} posts, ${state.db.collections.length} collecties, ${all.filter(p => p.hidden).length} verborgen.`;
   }
   $('#settings').showModal();
 }
 function readGhForm() {
-  return { owner: $('#sOwner').value.trim(), repo: $('#sRepo').value.trim(), branch: $('#sBranch').value.trim() || 'main', token: $('#sToken').value.trim() };
+  return { owner: $('#gOwner').value.trim(), repo: $('#gRepo').value.trim(), branch: $('#gBranch').value.trim() || 'main', token: $('#gToken').value.trim() };
 }
-function ghMsg(t, cls) { const el = $('#sGhMsg'); el.textContent = t; el.className = 'msg ' + (cls || ''); }
+function ghMsg(t, cls) { const el = $('#gMsg'); el.textContent = t; el.className = 'msg ' + (cls || ''); }
 
 /* ---------- Events ---------- */
+function setCols(n) {
+  document.documentElement.style.setProperty('--cols', n);
+  $('#cols').value = n;
+}
+function setView(v) { state.view = v; store.set('view', v); state.tag = null; render(); scrollTo({ top: 0 }); }
+
 function bind() {
-  $('#size').value = store.get('size', 220);
-  document.documentElement.style.setProperty('--card', $('#size').value + 'px');
+  setCols(store.get('cols', 6));
   $('#sort').value = state.sort;
 
   $('#lockForm').addEventListener('submit', async (e) => {
@@ -530,64 +702,72 @@ function bind() {
     const pw = $('#pw').value;
     if (!state.blob) {
       if (pw.length < 8) return lockMsg('Kies minimaal 8 tekens.', 'err');
-      if (pw !== $('#pw2').value) return lockMsg('Wachtwoorden komen niet overeen.', 'err');
+      if (pw !== $('#pw2').value) return lockMsg('De wachtwoorden zijn niet gelijk.', 'err');
     }
     await unlock(pw, $('#remember').checked);
     $('#pw').value = ''; $('#pw2').value = '';
   });
   $('#lockSettings').addEventListener('click', openSettings);
 
-  $('#tabs').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-view]'); if (!b) return;
-    state.view = b.dataset.view; store.set('view', state.view); render(); window.scrollTo({ top: 0 });
-  });
-  $('#tagbar').addEventListener('click', (e) => {
+  $('#colls').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setView(b.dataset.view); });
+  $('#tags').addEventListener('click', (e) => {
     const b = e.target.closest('[data-tag]'); if (!b) return;
-    state.tag = state.tag === b.dataset.tag ? null : b.dataset.tag; render();
+    state.tag = state.tag === b.dataset.tag ? null : b.dataset.tag; render(); scrollTo({ top: 0 });
   });
   let qTimer;
-  $('#q').addEventListener('input', (e) => { clearTimeout(qTimer); qTimer = setTimeout(() => { state.q = e.target.value; render(); }, 120); });
+  $('#q').addEventListener('input', (e) => { clearTimeout(qTimer); qTimer = setTimeout(() => { state.q = e.target.value; render(); }, 140); });
   $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; store.set('sort', state.sort); render(); });
-  $('#size').addEventListener('input', (e) => { document.documentElement.style.setProperty('--card', e.target.value + 'px'); store.set('size', +e.target.value); });
+  $('#cols').addEventListener('input', (e) => { setCols(+e.target.value); store.set('cols', +e.target.value); });
+  $('#modeWall').addEventListener('click', () => { state.mode = 'wall'; store.set('mode', 'wall'); render(); });
+  $('#modeIndex').addEventListener('click', () => { state.mode = 'index'; store.set('mode', 'index'); render(); });
 
-  $('#grid').addEventListener('click', (e) => { const c = e.target.closest('.card'); if (c) openPost(+c.dataset.i); });
-  $('#grid').addEventListener('error', (e) => { if (e.target.tagName === 'IMG') e.target.remove(); }, true);
+  $('#wall').addEventListener('click', (e) => { const t = e.target.closest('.tile'); if (t) openPost(+t.dataset.i); });
+  const idx = $('#index');
+  idx.addEventListener('click', (e) => { const li = e.target.closest('li'); if (li) openPost(+li.dataset.i); });
+  idx.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const li = e.target.closest('li'); if (li) openPost(+li.dataset.i); } });
+  idx.addEventListener('mousemove', (e) => {
+    const li = e.target.closest('li');
+    if (!li) return hidePeek();
+    showPeek(+li.dataset.i, e.clientX, e.clientY);
+  });
+  idx.addEventListener('mouseleave', hidePeek);
 
-  $('#mClose').addEventListener('click', closeModal);
-  $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
-  $('#mPrev').addEventListener('click', () => openPost(state.openIdx - 1));
-  $('#mNext').addEventListener('click', () => openPost(state.openIdx + 1));
-  $('#mNote').addEventListener('input', (e) => editPost(p => { p.note = e.target.value; }));
-  $('#mTagIn').addEventListener('keydown', (e) => {
+  $('#sClose').addEventListener('click', () => closeScreen());
+  $('#sPrev').addEventListener('click', () => openPost(state.openIdx - 1));
+  $('#sNext').addEventListener('click', () => openPost(state.openIdx + 1));
+  $('#sColls').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) { closeScreen(false); setView(b.dataset.view); } });
+  $('#sNote').addEventListener('input', (e) => editPost(p => { p.note = e.target.value; }));
+  $('#sTagIn').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ',') return;
     e.preventDefault();
-    const t = e.target.value.trim().replace(/^#/, '').toLowerCase();
+    const t = e.target.value.trim().replace(/^#/, '').toLowerCase().replace(/\s+/g, '-');
     if (!t) return;
     editPost(p => { if (!p.tags.includes(t)) p.tags.push(t); });
     e.target.value = '';
-    renderModalTags(currentPost());
-    renderTagbar();
+    renderScreenTags(currentPost());
+    renderRail();
   });
-  $('#mTags').addEventListener('click', (e) => {
+  $('#sTags').addEventListener('click', (e) => {
     const x = e.target.closest('[data-rm]'); if (!x) return;
     editPost(p => { p.tags = p.tags.filter(t => t !== x.dataset.rm); });
-    renderModalTags(currentPost());
+    renderScreenTags(currentPost());
+    renderRail();
   });
-  $('#mCopy').addEventListener('click', async () => {
+  $('#sCopy').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(postUrl(currentPost())); toast('Link gekopieerd.'); } catch { toast('Kopiëren lukte niet.'); }
   });
-  $('#mHide').addEventListener('click', () => {
+  $('#sHide').addEventListener('click', () => {
     editPost(p => { p.hidden = true; });
     const i = state.openIdx;
     state.list = computeList();
-    if (state.list.length) openPost(Math.min(i, state.list.length - 1)); else closeModal();
-    toast('Verborgen. Terugzetten kan via Instellingen.');
+    if (state.list.length) { $('#sCrop').dataset.code = ''; openPost(Math.min(i, state.list.length - 1)); } else closeScreen();
+    toast('Verborgen. Terugzetten kan in instellingen.');
   });
 
   document.addEventListener('keydown', (e) => {
     const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
-    if (!$('#modal').hidden) {
-      if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
+    if (!$('#screen').hidden) {
+      if (e.key === 'Escape') { e.preventDefault(); if (typing) document.activeElement.blur(); else closeScreen(); }
       else if (!typing && e.key === 'ArrowLeft' && state.openIdx > 0) openPost(state.openIdx - 1);
       else if (!typing && e.key === 'ArrowRight' && state.openIdx < state.list.length - 1) openPost(state.openIdx + 1);
       return;
@@ -598,7 +778,7 @@ function bind() {
 
   // Import
   $('#btnImport').addEventListener('click', () => $('#file').click());
-  $('#sImport').addEventListener('click', () => $('#file').click());
+  $('#dImport').addEventListener('click', () => $('#file').click());
   $('#file').addEventListener('change', async (e) => { await importFiles(e.target.files); e.target.value = ''; });
   let dragDepth = 0;
   window.addEventListener('dragenter', (e) => { if (!state.db || !e.dataTransfer?.types.includes('Files')) return; dragDepth++; $('#drop').hidden = false; });
@@ -612,54 +792,50 @@ function bind() {
 
   // Instellingen
   $('#btnSettings').addEventListener('click', openSettings);
-  $('#sTest').addEventListener('click', async () => {
+  $('#gTest').addEventListener('click', async () => {
     const c = readGhForm();
     if (!c.owner || !c.repo || !c.token) return ghMsg('Vul eigenaar, repo en token in.', 'err');
-    ghMsg('Testen…');
+    ghMsg('Bezig met testen…');
     try { const r = await ghTest(c); ghMsg(r.msg, r.ok ? 'ok' : 'err'); } catch (e) { ghMsg('Netwerkfout: ' + e.message, 'err'); }
   });
-  $('#sSaveGh').addEventListener('click', async () => {
+  $('#gSave').addEventListener('click', async () => {
     const c = readGhForm();
     if (!c.owner || !c.repo || !c.token) return ghMsg('Vul eigenaar, repo en token in.', 'err');
     store.set('gh', c);
-    ghMsg('Opgeslagen.', 'ok');
+    ghMsg('Koppeling bewaard.', 'ok');
     if (state.db) {
-      // Bestaande remote data ophalen en samenvoegen, daarna wegschrijven
       try {
         const remote = await ghGet();
         if (remote) state.db = mergeDb(state.db, await decryptDb(remote, state.password));
         render(); save();
-      } catch (e) { ghMsg('Opgeslagen, maar ophalen lukte niet: ' + e.message, 'warn'); }
+      } catch (e) { ghMsg('Bewaard, maar ophalen lukte niet: ' + e.message, 'err'); }
     } else {
       const err = await loadBlob();
-      showLock(err ? 'Kon data niet ophalen: ' + err.message : '');
+      showLock(err ? 'Kon de data niet ophalen: ' + err.message : '');
     }
   });
-  $('#sBackup').addEventListener('click', () => {
+  $('#dBackup').addEventListener('click', () => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(state.db, null, 2)], { type: 'application/json' }));
-    a.download = `inspiratie-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `inspo-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   });
-  $('#sUnhide').addEventListener('click', () => {
+  $('#dUnhide').addEventListener('click', () => {
     let n = 0;
     for (const p of Object.values(state.db.posts)) if (p.hidden) { p.hidden = false; p.editedAt = Date.now(); n++; }
     toast(`${n} posts teruggezet.`); render(); if (n) markDirty();
   });
-  $('#sChangePw').addEventListener('click', () => {
-    const pw = $('#sNewPw').value;
-    const el = $('#sPwMsg');
+  $('#pChange').addEventListener('click', () => {
+    const pw = $('#pNew').value;
+    const el = $('#pMsg');
     if (pw.length < 8) { el.textContent = 'Kies minimaal 8 tekens.'; el.className = 'msg err'; return; }
     state.password = pw;
     if (store.get('pw', null)) store.set('pw', pw);
-    $('#sNewPw').value = '';
-    el.textContent = 'Wachtwoord gewijzigd. Wordt opnieuw versleuteld en opgeslagen.'; el.className = 'msg ok';
+    $('#pNew').value = '';
+    el.textContent = 'Wachtwoord gewijzigd. De data wordt opnieuw versleuteld en opgeslagen.'; el.className = 'msg ok';
     markDirty();
   });
-  $('#sLock').addEventListener('click', () => {
-    store.del('pw');
-    location.reload();
-  });
+  $('#pLock').addEventListener('click', () => { store.del('pw'); location.reload(); });
 }
 
 /* ---------- Start ---------- */
@@ -667,7 +843,7 @@ function bind() {
   bind();
   if (!gh()) store.set('gh', { ...DEFAULT_GH });
   const err = await loadBlob();
-  showLock(err ? 'Kon data niet ophalen: ' + err.message + ' (lokale kopie gebruikt indien aanwezig)' : '');
+  showLock(err ? 'Kon de data niet ophalen: ' + err.message + '. De lokale kopie wordt gebruikt als die er is.' : '');
   const pw = store.get('pw', null);
   if (pw && state.blob) await unlock(pw, true);
 })();

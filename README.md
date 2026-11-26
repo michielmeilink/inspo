@@ -1,9 +1,10 @@
-# Inspiratie
+# inspo
 
 Dashboard voor opgeslagen Instagram-posts, op `inspo.michielmeilink.com` (GitHub Pages).
 
-- Tabs per collectie, zoeken op account, caption, tag en notitie
-- Speler in een pop-up (Instagram-embed), met ← → naar de vorige of volgende post en Esc om te sluiten
+- Twee weergaven: *wall* (een naadloze wand van echte frames) en *index* (een tekstlijst met preview bij hover)
+- Collecties en tags in de zijbalk, zoeken op account, caption, tag en notitie (toets `/`)
+- Afspelen schermvullend op zwart, met ← → naar de vorige of volgende post en Esc om te sluiten
 - Eigen tags en notities per post
 - Data staat versleuteld in `data.enc` (AES-256-GCM, sleutel via PBKDF2 uit je wachtwoord). Zonder wachtwoord is de repo onleesbaar.
 - Opslaan gaat via de GitHub API met een token dat alleen in je browser staat
@@ -38,7 +39,8 @@ Zonder token kun je alleen kijken, niet opslaan: de site leest dan `data.enc` va
 
 ## Bekende beperkingen
 
-- Thumbnails: Instagram geeft voor de meeste posts geen losse thumbnail-URL. Kaarten zonder afbeelding tonen het account als placeholder. De sync-extensie (volgende stap) vult thumbnails en captions aan.
+- De beelden zijn de officiële Instagram-embeds, bijgesneden tot alleen het frame. De embed meldt zijn hoogte, en daaruit volgt de uitsnede. Bij staande reels met een liggende video kunnen zwarte balken zichtbaar blijven.
+- Een embed die nooit zijn hoogte meldt, is een verwijderde of afgeschermde post. Die wordt getoond als "niet meer beschikbaar".
 - Een post die op Instagram verwijderd is, speelt niet meer af.
 
 ## Lokaal draaien
