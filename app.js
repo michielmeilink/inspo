@@ -134,7 +134,7 @@ function mergeInto(out, remote) {
     const lp = out.posts[code];
     if (!lp) { out.posts[code] = rp; continue; }
     for (const c of rp.collections || []) if (!lp.collections.includes(c)) lp.collections.push(c);
-    for (const k of ['owner', 'caption', 'thumb', 'w', 'h', 'dur', 'mt', 'takenAt']) if (!lp[k] && rp[k]) lp[k] = rp[k];
+    for (const k of ['owner', 'caption', 'thumb', 'w', 'h', 'dur', 'mt', 'n', 'takenAt']) if (!lp[k] && rp[k]) lp[k] = rp[k];
     if ((rp.savedAt || 0) > (lp.savedAt || 0)) lp.savedAt = rp.savedAt;
     if ((rp.editedAt || 0) > (lp.editedAt || 0)) {
       lp.tags = rp.tags || []; lp.note = rp.note || ''; lp.hidden = !!rp.hidden; lp.editedAt = rp.editedAt;
@@ -249,14 +249,23 @@ function parseExport(files) {
   return items;
 }
 
-async function readFiles(fileList) {
+async function readFiles(fileList, onProgress = () => {}) {
   const jsons = [];
   for (const f of fileList) {
     if (/\.zip$/i.test(f.name)) {
+      onProgress(-1, 'zip openen…');
       const zip = await JSZip.loadAsync(f);
-      for (const [path, entry] of Object.entries(zip.files)) {
-        if (entry.dir || !/\.json$/i.test(path) || !/saved/i.test(path)) continue;
-        try { jsons.push({ name: path, json: JSON.parse(await entry.async('string')) }); } catch {}
+      const entries = Object.entries(zip.files).filter(([path, entry]) => !entry.dir && /\.json$/i.test(path) && /saved/i.test(path));
+      let i = 0;
+      for (const [path, entry] of entries) {
+        const name = path.split('/').pop();
+        try {
+          const text = await entry.async('string', (meta) => onProgress((i + meta.percent / 100) / entries.length, `uitpakken: ${name}`));
+          onProgress((i + 1) / entries.length, `lezen: ${name}`);
+          await nextFrame();
+          jsons.push({ name: path, json: JSON.parse(text) });
+        } catch {}
+        i++;
       }
     } else if (/\.json$/i.test(f.name)) {
       try {
@@ -272,17 +281,41 @@ async function readFiles(fileList) {
 
 async function importFiles(fileList) {
   if (!state.db) return;
-  const files = await readFiles(fileList);
-  if (!files.length) { toast('Geen saved_*.json gevonden. Kies bij de export het formaat JSON, niet HTML.'); return; }
+  // Fasen: uitpakken 0-60%, verwerken 60-80%, opslaan 80-100%
+  const files = await readFiles(fileList, (f, label) => progress(f < 0 ? -1 : f * 0.6, label));
+  if (!files.length) { progress(null); toast('Geen saved_*.json gevonden. Kies bij de export het formaat JSON, niet HTML.'); return; }
+  progress(0.62, 'posts verwerken…');
+  await nextFrame();
   const before = Object.keys(state.db.posts).length;
-  for (const f of files.filter(f => f.backup)) state.db = mergeDb(state.db, f.backup);
+  for (const f of files.filter(f => f.backup)) mergeInto(state.db, f.backup);
   const items = parseExport(files.filter(f => f.json));
-  for (const it of items) addPost(state.db, it);
+  for (let i = 0; i < items.length; i++) {
+    addPost(state.db, items[i]);
+    if (i % 300 === 299) { progress(0.62 + 0.18 * (i / items.length), `posts verwerken: ${i + 1} van ${items.length}`); await nextFrame(); }
+  }
   const added = Object.keys(state.db.posts).length - before;
-  toast(`${added} nieuwe posts toegevoegd (${items.length} verwerkt).`);
   render();
-  markDirty();
+  progress(0.85, 'opslaan…');
+  clearTimeout(saveTimer);
+  await save();
+  progress(1, `${added} nieuwe posts`);
+  toast(`${added} nieuwe posts toegevoegd (${items.length} verwerkt).`);
 }
+
+/* ---------- Voortgang ----------
+ * Dunne balk bovenin. frac 0..1, of -1 voor 'bezig, duur onbekend'. null verbergt hem. */
+let progressHide = 0;
+function progress(frac, label) {
+  const el = $('#progress');
+  clearTimeout(progressHide);
+  if (frac == null) { el.hidden = true; return; }
+  el.hidden = false;
+  el.classList.toggle('indet', frac < 0);
+  if (frac >= 0) $('i', el).style.transform = `scaleX(${Math.max(0, Math.min(1, frac))})`;
+  if (label) setStatus(label);
+  if (frac >= 1) progressHide = setTimeout(() => { el.hidden = true; }, 700);
+}
+const nextFrame = () => new Promise(r => requestAnimationFrame(() => r()));
 
 /* ---------- Opslaan ---------- */
 let saveTimer = null;
@@ -554,6 +587,7 @@ function applyMeta(p, m) {
   let changed = false;
   const set = (k, v) => { if (v && p[k] !== v) { p[k] = v; changed = true; } };
   set('w', m.w); set('h', m.h); set('dur', Math.round((m.dur || 0) * 10) / 10); set('mt', m.mt); set('takenAt', m.takenAt);
+  if (m.items && m.items.length > 1) set('n', m.items.length);
   if (!p.owner) set('owner', m.owner);
   if (!p.caption) set('caption', m.caption);
   if (m.product) set('type', typeFromMedia(m, p.type));
@@ -577,7 +611,7 @@ async function walkFeed(fetchPage, onItems, label, incremental) {
   let next = null, page = 0;
   do {
     if (sync.stop) return;
-    setStatus(`${label}, pagina ${++page}`);
+    progress(-1, `${label}, pagina ${++page}`);
     const r = await fetchPage(next);
     const fresh = onItems(r.items || []);
     next = r.next;
@@ -656,7 +690,7 @@ async function runSync() {
     let n = 0;
     for (const p of todo) {
       if (sync.stop) break;
-      setStatus(`thumbnails ${++n} van ${todo.length}`);
+      progress(n / Math.max(1, todo.length), `thumbnails ${++n} van ${todo.length}`);
       let m = meta.get(p.code);
       try {
         if (!m || !m.thumb) {
@@ -689,6 +723,7 @@ async function runSync() {
     setStatus('sync gestopt: ' + e.message, 'err');
     toast(e.message);
   } finally {
+    progress(null);
     sync.running = false; sync.stop = false;
     updateSyncUi();
     const y = scrollY; render(); scrollTo(0, y);
@@ -770,18 +805,24 @@ function mountPlayer(crop, p, m, idx) {
     if (b) { e.stopPropagation(); mountPlayer(crop, p, m, +b.dataset.k); }
   });
 
+  const slide = (d) => {
+    const k = idx + d;
+    if (k < 0 || k >= m.items.length) return false;
+    mountPlayer(crop, p, m, k);
+    return true;
+  };
   if (!it.video) {
     const img = wrap.querySelector('img');
     img.referrerPolicy = 'no-referrer';
     img.addEventListener('load', () => crop.querySelector('.poster')?.remove(), { once: true });
     img.src = it.image || it.thumb;
-    player = { wrap };
+    player = { wrap, slide };
     $('#sKeys').hidden = true;
     return;
   }
 
   const v = wrap.querySelector('video');
-  player = { wrap, v };
+  player = { wrap, v, slide };
   $('#sKeys').hidden = false;
   const ui = {
     cur: $('.vp-cur', wrap), left: $('.vp-left', wrap), fill: $('.vp-fill', wrap), buf: $('.vp-buf', wrap),
@@ -959,6 +1000,7 @@ function tileHtml(p, i) {
   return `<button class="tile" data-i="${i}" aria-label="${esc(who)}">
     ${cropHtml(p)}
     ${p.note ? '<i class="mark-note" title="heeft notitie"></i>' : ''}
+    ${p.mt === 8 || p.n > 1 ? `<span class="multi" title="carousel${p.n ? ' met ' + p.n + ' onderdelen' : ''}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="4.5" width="10" height="10" rx="1"/><path d="M4.5 1.5h10v10"/></svg>${p.n || ''}</span>` : ''}
     <figcaption><b>${esc(who)}</b><span>${esc(firstLine(p.caption) || p.tags.map(t => '#' + t).join(' '))}</span></figcaption>
   </button>`;
 }
@@ -1347,6 +1389,7 @@ function bind() {
     if (!$('#screen').hidden) {
       if (e.key === 'Escape') { e.preventDefault(); if (typing) document.activeElement.blur(); else closeScreen(); }
       else if (!typing && !e.metaKey && !e.ctrlKey && playerKey(e)) { /* afgehandeld door de speler */ }
+      else if (!typing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && player && player.slide && player.slide(e.key === 'ArrowRight' ? 1 : -1)) { e.preventDefault(); }
       else if (!typing && e.key === 'ArrowLeft' && state.openIdx > 0) openPost(state.openIdx - 1);
       else if (!typing && e.key === 'ArrowRight' && state.openIdx < state.list.length - 1) openPost(state.openIdx + 1);
       return;
