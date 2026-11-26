@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Inspiratie</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Vergrendelscherm -->
+  <section id="lock" class="lock">
+    <form id="lockForm" class="lock-card" autocomplete="off">
+      <h1>Inspiratie</h1>
+      <p id="lockIntro" class="muted">Voer je wachtwoord in.</p>
+      <input id="pw" type="password" placeholder="Wachtwoord" autocomplete="current-password" required>
+      <input id="pw2" type="password" placeholder="Herhaal wachtwoord" hidden>
+      <label class="check"><input id="remember" type="checkbox" checked> Onthoud op dit apparaat</label>
+      <button type="submit" class="primary" id="lockBtn">Ontgrendel</button>
+      <p id="lockMsg" class="msg"></p>
+      <button type="button" class="link" id="lockSettings">GitHub-koppeling instellen</button>
+    </form>
+  </section>
+
+  <!-- App -->
+  <div id="app" hidden>
+    <header class="top">
+      <div class="brand">Inspiratie</div>
+      <div class="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" type="search" placeholder="Zoek op account, tag, notitie…" autocomplete="off">
+        <kbd>/</kbd>
+      </div>
+      <select id="sort" title="Sorteren">
+        <option value="new">Nieuwst opgeslagen</option>
+        <option value="old">Oudst opgeslagen</option>
+        <option value="owner">Account A–Z</option>
+        <option value="edited">Laatst bewerkt</option>
+      </select>
+      <input id="size" type="range" min="140" max="360" step="10" title="Grootte">
+      <span id="status" class="status"></span>
+      <button id="btnImport" class="ghost">Importeer</button>
+      <button id="btnSettings" class="icon" title="Instellingen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </header>
+    <nav id="tabs" class="tabs"></nav>
+    <div id="tagbar" class="tagbar"></div>
+    <main id="grid" class="grid"></main>
+    <div id="empty" class="empty" hidden></div>
+  </div>
+
+  <!-- Speler -->
+  <div id="modal" class="modal" hidden>
+    <div class="mbox">
+      <div class="player"><iframe id="frame" title="Instagram-post" allow="autoplay; encrypted-media; clipboard-write; fullscreen" allowfullscreen></iframe></div>
+      <aside class="side">
+        <div class="mhead">
+          <a id="mOwner" target="_blank" rel="noopener"></a>
+          <button id="mClose" class="icon" title="Sluiten (Esc)">✕</button>
+        </div>
+        <div id="mDate" class="muted small"></div>
+        <div id="mColls" class="chips"></div>
+        <p id="mCaption" class="caption"></p>
+        <label for="mTagIn">Tags</label>
+        <div id="mTags" class="chips"></div>
+        <input id="mTagIn" list="tagList" placeholder="Tag toevoegen, Enter" autocomplete="off">
+        <datalist id="tagList"></datalist>
+        <label for="mNote">Notitie</label>
+        <textarea id="mNote" rows="5" placeholder="Wat vind je hier goed aan? Timing, transitie, type…"></textarea>
+        <div class="mact">
+          <a id="mOpen" class="btn" target="_blank" rel="noopener">Open op Instagram ↗</a>
+          <button id="mCopy" class="ghost">Kopieer link</button>
+          <button id="mHide" class="ghost danger">Verberg</button>
+        </div>
+        <div class="mnav">
+          <button id="mPrev" class="ghost" title="Vorige (←)">←</button>
+          <span id="mPos" class="muted small"></span>
+          <button id="mNext" class="ghost" title="Volgende (→)">→</button>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Instellingen -->
+  <dialog id="settings">
+    <form method="dialog" class="settings">
+      <h2>Instellingen</h2>
+
+      <fieldset>
+        <legend>GitHub-opslag</legend>
+        <p class="muted small">De versleutelde data staat als <code>data.enc</code> in je repo. Het token blijft in deze browser.</p>
+        <div class="row">
+          <label>Eigenaar<input id="sOwner" placeholder="michielmeilink"></label>
+          <label>Repo<input id="sRepo" placeholder="inspiratie"></label>
+          <label>Branch<input id="sBranch" placeholder="main"></label>
+        </div>
+        <label>Fine-grained token (Contents: read &amp; write)<input id="sToken" type="password" placeholder="github_pat_…" autocomplete="off"></label>
+        <div class="row">
+          <button type="button" id="sTest" class="ghost">Test koppeling</button>
+          <button type="button" id="sSaveGh" class="primary">Opslaan</button>
+        </div>
+        <p id="sGhMsg" class="msg"></p>
+      </fieldset>
+
+      <fieldset class="needs-unlock">
+        <legend>Data</legend>
+        <div class="row">
+          <button type="button" id="sImport" class="ghost">Importeer export (.zip / .json)</button>
+          <button type="button" id="sBackup" class="ghost">Download back-up (JSON)</button>
+          <button type="button" id="sUnhide" class="ghost">Verborgen posts terugzetten</button>
+        </div>
+        <p id="sStats" class="muted small"></p>
+      </fieldset>
+
+      <fieldset class="needs-unlock">
+        <legend>Wachtwoord</legend>
+        <div class="row">
+          <input id="sNewPw" type="password" placeholder="Nieuw wachtwoord" autocomplete="new-password">
+          <button type="button" id="sChangePw" class="ghost">Wijzig</button>
+          <button type="button" id="sLock" class="ghost danger">Vergrendel en vergeet</button>
+        </div>
+        <p id="sPwMsg" class="msg"></p>
+      </fieldset>
+
+      <div class="row end"><button class="primary" value="close">Sluiten</button></div>
+    </form>
+  </dialog>
+
+  <div id="drop" class="drop" hidden><div>Laat los om te importeren</div></div>
+  <div id="toast" class="toast" hidden></div>
+  <input id="file" type="file" multiple accept=".zip,.json,application/zip,application/json" hidden>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
