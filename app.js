@@ -8,7 +8,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
 const DATA_FILE = 'data.enc';
-const DEFAULT_GH = { owner: 'michielmeilink', repo: 'inspiratie', branch: 'main', token: '' };
+const DEFAULT_GH = { owner: 'michielmeilink', repo: 'inspo', branch: 'main', token: '' };
 
 const store = {
   get(k, d) { try { const v = localStorage.getItem('insp.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },

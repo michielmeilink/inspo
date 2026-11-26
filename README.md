@@ -1,6 +1,6 @@
 # Inspiratie
 
-Dashboard voor opgeslagen Instagram-posts, op `inspiratie.michielmeilink.com` (GitHub Pages).
+Dashboard voor opgeslagen Instagram-posts, op `inspo.michielmeilink.com` (GitHub Pages).
 
 - Tabs per collectie, zoeken op account, caption, tag en notitie
 - Speler in een pop-up (Instagram-embed), met ← → naar de vorige of volgende post en Esc om te sluiten
@@ -10,15 +10,15 @@ Dashboard voor opgeslagen Instagram-posts, op `inspiratie.michielmeilink.com` (G
 
 ## Eenmalige setup
 
-1. **Repo aanmaken.** Maak op GitHub een nieuwe repo `inspiratie` aan, publiek, zonder README. Push daarna deze map:
+1. **Repo aanmaken.** Maak op GitHub een nieuwe repo `inspo` aan, publiek, zonder README. Push daarna deze map:
    ```bash
-   git remote add origin https://github.com/michielmeilink/inspiratie.git
+   git remote add origin https://github.com/michielmeilink/inspo.git
    git push -u origin main
    ```
 2. **Pages aanzetten.** Ga naar repo → Settings → Pages → Source: *Deploy from a branch*, branch `main`, map `/ (root)`. Het custom domain wordt uit `CNAME` gehaald. Zet *Enforce HTTPS* aan zodra dat kan.
-3. **DNS bij TransIP.** Voeg een record toe: `inspiratie` · `CNAME` · `michielmeilink.github.io.` (met de punt aan het eind, net als bij `recepten`).
+3. **DNS bij TransIP.** Voeg een record toe: `inspo` · `CNAME` · `michielmeilink.github.io.` (met de punt aan het eind, net als bij `recepten`).
 4. **Token aanmaken.** Ga naar GitHub → Settings → Developer settings → Fine-grained tokens → *Generate new token*.
-   - Repository access: *Only select repositories* → `inspiratie`
+   - Repository access: *Only select repositories* → `inspo`
    - Permissions → Repository → **Contents: Read and write** (de rest blijft uit)
    - Kies zelf een vervaldatum. Daarna maak je een nieuw token en plak je dat opnieuw in.
 5. **Koppelen.** Open de site → *GitHub-koppeling instellen* → plak het token → *Test koppeling* → *Opslaan*.
